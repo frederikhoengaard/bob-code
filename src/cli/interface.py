@@ -6,7 +6,7 @@ from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import FormattedTextControl, HSplit, Layout, Window
 from prompt_toolkit.lexers import Lexer
-from prompt_toolkit.widgets import Frame, TextArea
+from prompt_toolkit.widgets import TextArea
 
 from src.agent import CodeAgent
 from src.providers import AzureOpenAIProvider, LLMProvider
@@ -49,12 +49,12 @@ class CodeAgentTUI:
             "/models": "List available models",
         }
 
-        # Output area (read-only)
-        self.output_area = TextArea(
+        # Conversation area (includes welcome message, then conversations)
+        self.conversation_area = TextArea(
             text=self._welcome_message(),
             multiline=True,
             scrollbar=True,
-            focusable=False,
+            focusable=True,
             read_only=True,
             wrap_lines=True,
             lexer=ANSILexer(),
@@ -180,16 +180,32 @@ class CodeAgentTUI:
 
         @kb.add("escape")
         def _(event):
-            # Clear input on Escape
+            # Clear input on Escape and focus input area
             self.input_area.text = ""
+            event.app.layout.focus(self.input_area)
 
         self.input_area.control.key_bindings = kb
 
+        # Global key bindings for focus management
+        global_kb = KeyBindings()
+
+        @global_kb.add("c-up")
+        def _(event):
+            # Focus conversation area (for scrolling)
+            event.app.layout.focus(self.conversation_area)
+
+        @global_kb.add("c-down")
+        def _(event):
+            # Focus input area (for typing)
+            event.app.layout.focus(self.input_area)
+
+        self.global_keybindings = global_kb
+
     async def append_output(self, text: str):
-        """Add text to output area"""
-        self.output_area.text += text
+        """Add text to conversation area"""
+        self.conversation_area.text += text
         # Auto-scroll to bottom
-        self.output_area.buffer.cursor_position = len(self.output_area.text)
+        self.conversation_area.buffer.cursor_position = len(self.conversation_area.text)
 
     async def process_input(self):
         """Process user input"""
@@ -229,7 +245,7 @@ class CodeAgentTUI:
         except Exception as e:
             await self.append_output(f"{self.RESET}\n\n❌ Error: {str(e)}\n")
 
-        await self.append_output(f"{self.RESET}")
+        await self.append_output(f"{self.RESET}\n\n")
         self.is_streaming = False
 
         # Update token count (approximate)
@@ -280,8 +296,8 @@ class CodeAgentTUI:
         return Layout(
             HSplit(
                 [
-                    # Main output area
-                    Frame(self.output_area, title="Conversation"),
+                    # Conversation area (scrollable, includes welcome at top)
+                    self.conversation_area,
                     # Horizontal line separator
                     Window(height=1, char="─"),
                     # Input area
@@ -305,9 +321,13 @@ class CodeAgentTUI:
         """Run the TUI application"""
         self.app = Application(
             layout=self.create_layout(),
+            key_bindings=self.global_keybindings,
             full_screen=True,
             mouse_support=True,
         )
+
+        # Focus input area by default
+        self.app.layout.focus(self.input_area)
 
         await self.app.run_async()
 
