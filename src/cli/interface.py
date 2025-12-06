@@ -103,20 +103,25 @@ class CodeAgentTUI:
         # GRAY = "\x1b[38;2;152;151;151m"  # #989797 in true color
 
         return f"""{BLUE}
-  ██████╗  ██████╗ ██████╗
-  ██╔══██╗██╔═══██╗██╔══██╗
-  ██████╔╝██║   ██║██████╔╝
-  ██╔══██╗██║   ██║██╔══██╗
-  ██████╔╝╚██████╔╝██████╔╝
-  ╚═════╝  ╚═════╝ ╚═════╝ {RESET}
-
-  {BLUE}Welcome back Frederik!{RESET}
-
-  {BLUE}Tips for getting started{RESET}
-  Run {BLUE}/init{RESET} to create a CLAUDE.md file with instructions for Claude
-
-  {BLUE}Recent activity{RESET}
-  No recent activity
+  ╔═══════════════════════════════════════════════════════════════════════╗
+  ║                                                                       ║
+  ║    {BLUE}██████{RESET}╗  {BLUE}██████{RESET}╗ {BLUE}██████{RESET}╗                                           ║
+  ║    {BLUE}██{RESET}╔══{BLUE}██{RESET}╗{BLUE}██{RESET}╔═══{BLUE}██{RESET}╗{BLUE}██{RESET}╔══{BLUE}██{RESET}╗                                          ║
+  ║    {BLUE}██████{RESET}╔╝{BLUE}██{RESET}║   {BLUE}██{RESET}║{BLUE}██████{RESET}╔╝                                          ║
+  ║    {BLUE}██{RESET}╔══{BLUE}██{RESET}╗{BLUE}██{RESET}║   {BLUE}██{RESET}║{BLUE}██{RESET}╔══{BLUE}██{RESET}╗                                          ║
+  ║    {BLUE}██████╔╝╚{BLUE}██████{RESET}╔╝{BLUE}██████{RESET}╔╝                                          ║
+  ║    {RESET}╚═════╝  ╚═════╝ ╚═════╝                                           ║
+  ║                                                                       ║
+  ║    {BLUE}Welcome back Frederik!{RESET}                                             ║
+  ║                                                                       ║
+  ║    {BLUE}Tips for getting started{RESET}                                           ║
+  ║    Run {BLUE}/init{RESET} to create a BOB.md file with instructions for Bob        ║
+  ║                                                                       ║
+  ║    {BLUE}Recent activity{RESET}                                                    ║
+  ║    No recent activity                                                 ║
+  ║                                                                       ║
+  ╚═══════════════════════════════════════════════════════════════════════╝
+{RESET}
 
 """
 
