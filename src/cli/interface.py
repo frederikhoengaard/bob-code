@@ -1,9 +1,11 @@
 import asyncio
 
 from prompt_toolkit import Application
-from prompt_toolkit.formatted_text import HTML
+from prompt_toolkit.filters import Condition
+from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout import HSplit, Layout
+from prompt_toolkit.layout import FormattedTextControl, HSplit, Layout, Window
+from prompt_toolkit.lexers import Lexer
 from prompt_toolkit.widgets import Frame, TextArea
 
 from src.agent import CodeAgent
@@ -11,10 +13,37 @@ from src.providers import AzureOpenAIProvider, LLMProvider
 from src.providers.models import LLM
 
 
+class ANSILexer(Lexer):
+    """Lexer that interprets ANSI escape codes for colored output."""
+
+    def lex_document(self, document):
+        """Convert each line's ANSI codes to formatted text."""
+
+        def get_line(lineno):
+            try:
+                line = document.lines[lineno]
+                return ANSI(line).__pt_formatted_text__()
+            except IndexError:
+                return []
+
+        return get_line
+
+
 class CodeAgentTUI:
     def __init__(self, provider: LLMProvider, model: LLM = LLM.GPT_4o_mini):
         provider = AzureOpenAIProvider(model=model)
         self.agent = CodeAgent(provider)
+        self.model = model or provider.model
+
+        # Available commands
+        self.commands = {
+            "/clear": "Clear conversation history",
+            "/help": "Show help message",
+            "/exit": "Exit the application",
+            "/quit": "Exit the application",
+            "/model": "Show current model info",
+            "/models": "List available models",
+        }
 
         # Output area (read-only)
         self.output_area = TextArea(
@@ -24,38 +53,109 @@ class CodeAgentTUI:
             focusable=False,
             read_only=True,
             wrap_lines=True,
+            lexer=ANSILexer(),
         )
 
         # Input area
         self.input_area = TextArea(
-            height=3,
+            height=1,
             multiline=False,
-            prompt=HTML("<ansiyellow>> </ansiyellow>"),
+            prompt="> ",
             focusable=True,
-            wrap_lines=True,
+            wrap_lines=False,
         )
+
+        # Command suggestions area
+        self.suggestions_text = ""
+        self.suggestions_control = FormattedTextControl(text=lambda: self.suggestions_text)
+        self.suggestions_window = Window(
+            content=self.suggestions_control,
+            height=3,
+            dont_extend_height=True,
+        )
+
+        # Info bar at bottom
+        self.info_control = FormattedTextControl(text=self._get_info_text)
+        self.info_window = Window(
+            content=self.info_control,
+            height=1,
+            dont_extend_height=True,
+        )
+
+        # Bind input changes to update suggestions
+        self.input_area.buffer.on_text_changed += self._on_input_changed
 
         self.setup_keybindings()
         self.app = None
         self.is_streaming = False
+        self.token_count = 0
 
     def _welcome_message(self) -> str:
-        return """╔══════════════════════════════════════════════════════════╗
-║               BOB-CODE - AI Coding Assistant             ║
-╚══════════════════════════════════════════════════════════╝
+        """Generate welcome screen with ASCII art logo and ANSI colors."""
+        # ANSI color codes - 256-color palette
+        BLUE = "\x1b[38;5;75m"  # Light blue (#6b9bd1 equivalent)
+        RESET = "\x1b[0m"
 
-Welcome! I'm here to help you with coding tasks.
+        return f"""{BLUE}
+  ██████╗  ██████╗ ██████╗
+  ██╔══██╗██╔═══██╗██╔══██╗
+  ██████╔╝██║   ██║██████╔╝
+  ██╔══██╗██║   ██║██╔══██╗
+  ██████╔╝╚██████╔╝██████╔╝
+  ╚═════╝  ╚═════╝ ╚═════╝ {RESET}
 
-Commands:
-  • Type your message and press Enter to send
-  • Ctrl+C to exit
-  • /clear to clear conversation history
-  • /help to show this help message
+  {BLUE}Welcome back Frederik!{RESET}
 
-Ready to assist!
-════════════════════════════════════════════════════════════
+  {BLUE}Tips for getting started{RESET}
+  Run {BLUE}/init{RESET} to create a CLAUDE.md file with instructions for Claude
+
+  {BLUE}Recent activity{RESET}
+  No recent activity
 
 """
+
+    def _get_info_text(self):
+        """Generate info bar with model name and working directory."""
+        import os
+
+        from prompt_toolkit.formatted_text import FormattedText
+
+        # Get working directory
+        cwd = os.getcwd()
+
+        # Truncate path if too long (keep last 40 chars)
+        if len(cwd) > 40:
+            display_path = "..." + cwd[-37:]
+        else:
+            display_path = cwd
+
+        model_name = str(self.model)
+
+        return FormattedText(
+            [
+                ("", f"{model_name} · {display_path}"),
+            ]
+        )
+
+    def _on_input_changed(self, _):
+        """Called whenever input text changes"""
+        text = self.input_area.text
+
+        if text.startswith("/"):
+            # Filter commands based on what user typed
+            query = text[1:].lower()  # Remove the / and lowercase
+            matching = [
+                f"  {cmd:15} {desc}"
+                for cmd, desc in self.commands.items()
+                if cmd[1:].lower().startswith(query)  # cmd[1:] removes the /
+            ]
+
+            if matching:
+                self.suggestions_text = "\n".join(matching[:5])  # Show max 5
+            else:
+                self.suggestions_text = "  No matching commands"
+        else:
+            self.suggestions_text = ""
 
     def setup_keybindings(self):
         """Setup keyboard shortcuts"""
@@ -71,6 +171,11 @@ Ready to assist!
         def _(event):
             # Exit on Ctrl+C
             event.app.exit()
+
+        @kb.add("escape")
+        def _(event):
+            # Clear input on Escape
+            self.input_area.text = ""
 
         self.input_area.control.key_bindings = kb
 
@@ -96,7 +201,7 @@ Ready to assist!
             return
 
         # Show user's message
-        await self.append_output(f"> {user_text}\n\n")
+        await self.append_output(f"  > {user_text}\n\n  ")
 
         # Stream agent response
         self.is_streaming = True
@@ -105,12 +210,23 @@ Ready to assist!
             async for chunk in self.agent.stream_chat(user_text):
                 for char in chunk.content:
                     await self.append_output(char)
-                    await asyncio.sleep(0.005)
+                    # Variable delay for natural typing feel
+                    if char in [".", "!", "?"]:
+                        await asyncio.sleep(0.03)
+                    elif char in [",", ";", ":"]:
+                        await asyncio.sleep(0.02)
+                    elif char == "\n":
+                        await asyncio.sleep(0.01)
+                    else:
+                        await asyncio.sleep(0.003)
         except Exception as e:
             await self.append_output(f"\n\n❌ Error: {str(e)}\n")
 
-        await self.append_output("\n\n" + "─" * 60 + "\n\n")
+        await self.append_output("\n\n  " + "─" * 60 + "\n\n")
         self.is_streaming = False
+
+        # Update token count (approximate)
+        self.token_count = len(self.agent.conversation_history) * 100  # rough estimate
 
     async def handle_command(self, command: str):
         """Handle special commands"""
@@ -118,28 +234,62 @@ Ready to assist!
 
         if cmd == "/clear":
             self.agent.clear_history()
+            self.token_count = 0
             await self.append_output("✓ Conversation history cleared.\n\n")
 
         elif cmd == "/help":
             await self.append_output(self._welcome_message())
+            await self.append_output("Available commands:\n")
+            for cmd, desc in self.commands.items():
+                await self.append_output(f"  {cmd:12} - {desc}\n")
+            await self.append_output("\n")
 
         elif cmd == "/exit" or cmd == "/quit":
             self.app.exit()
 
+        elif cmd == "/model":
+            await self.append_output(f"Current provider: {self.provider_name}\n")
+            await self.append_output(f"Current model: {self.model}\n\n")
+
+        elif cmd == "/models":
+            await self.append_output("Available providers:\n")
+            from src.providers import ProviderFactory
+
+            for provider in ProviderFactory.list_providers():
+                await self.append_output(f"  • {provider}\n")
+            await self.append_output("\n")
+
         else:
             await self.append_output(f"Unknown command: {command}\n")
             await self.append_output("Type /help for available commands.\n\n")
+
+    @Condition
+    def show_suggestions(self):
+        """Condition to show suggestions window"""
+        return bool(self.suggestions_text)
 
     def create_layout(self):
         """Create the TUI layout"""
         return Layout(
             HSplit(
                 [
+                    # Main output area
                     Frame(self.output_area, title="Conversation"),
-                    Frame(
-                        self.input_area,
-                        title="Input (Enter to send • Ctrl+C to exit • /help for commands)",
+                    # Horizontal line separator
+                    Window(height=1, char="─"),
+                    # Input area
+                    self.input_area,
+                    # Horizontal line separator
+                    Window(height=1, char="─"),
+                    # Command suggestions (only shown when typing /)
+                    HSplit(
+                        [
+                            self.suggestions_window,
+                        ],
+                        # filter=self.show_suggestions,
                     ),
+                    # Info bar at bottom
+                    self.info_window,
                 ]
             )
         )
