@@ -10,7 +10,9 @@ from prompt_toolkit.widgets import TextArea
 
 from src.agent import CodeAgent
 from src.providers import AzureOpenAIProvider, LLMProvider
-from src.providers.models import LLM
+from src.providers.models import LLM, Message
+from src.workspace.config import WorkspaceConfig, WorkspaceSettings
+from src.workspace.persistence import ConversationPersistence
 
 
 class ANSILexer(Lexer):
@@ -35,8 +37,26 @@ class CodeAgentTUI:
     RESET = "\x1b[0m"
 
     def __init__(self, provider: LLMProvider, model: LLM = LLM.GPT_4o_mini):
+        # Initialize workspace
+        self.workspace_config = WorkspaceConfig()
+        self._initialize_workspace_if_needed()
+
+        # Load model from settings (overrides default)
+        try:
+            settings = self.workspace_config.load_settings()
+            model = LLM(settings.model)
+        except (FileNotFoundError, ValueError):
+            # Use default model if settings don't exist or invalid
+            pass
+
         provider = AzureOpenAIProvider(model=model)
-        self.agent = CodeAgent(provider)
+
+        # Setup conversation persistence
+        self.persistence = ConversationPersistence(self.workspace_config)
+        self.current_conversation_file = self.persistence.start_new_conversation(str(model))
+
+        # Create agent with save callback
+        self.agent = CodeAgent(provider, on_conversation_update=self._on_conversation_update)
         self.model = model or provider.model
 
         # Available commands
@@ -93,6 +113,35 @@ class CodeAgentTUI:
         self.app = None
         self.is_streaming = False
         self.token_count = 0
+
+    def _initialize_workspace_if_needed(self):
+        """Initialize workspace if .bob/ doesn't exist"""
+        try:
+            created = self.workspace_config.initialize_workspace()
+            if created:
+                from datetime import datetime
+
+                default_settings = WorkspaceSettings(
+                    model=str(LLM.GPT_4o_mini),
+                    created_at=datetime.now().isoformat(),
+                    last_updated=datetime.now().isoformat(),
+                )
+                self.workspace_config.save_settings(default_settings)
+        except Exception as e:
+            import sys
+
+            print(f"Warning: Could not initialize workspace: {e}", file=sys.stderr)
+
+    def _on_conversation_update(self, messages: list[Message]):
+        """Callback when conversation is updated - auto-save"""
+        try:
+            self.persistence.save_conversation(
+                self.current_conversation_file, messages, str(self.model)
+            )
+        except Exception as e:
+            import sys
+
+            print(f"Warning: Could not save conversation: {e}", file=sys.stderr)
 
     def _welcome_message(self) -> str:
         """Generate welcome screen with ASCII art logo and ANSI colors."""
@@ -263,6 +312,12 @@ class CodeAgentTUI:
         if cmd == "/clear":
             self.agent.clear_history()
             self.token_count = 0
+
+            # Start new conversation file
+            self.current_conversation_file = self.persistence.start_new_conversation(
+                str(self.model)
+            )
+
             await self.append_output(f"{self.GRAY}✓ Conversation history cleared.{self.RESET}\n\n")
 
         elif cmd == "/help":
@@ -275,17 +330,66 @@ class CodeAgentTUI:
         elif cmd == "/exit" or cmd == "/quit":
             self.app.exit()
 
-        elif cmd == "/model":
-            await self.append_output(f"{self.GRAY}Current provider: {self.provider_name}\n")
-            await self.append_output(f"Current model: {self.model}{self.RESET}\n\n")
+        elif cmd.startswith("/model"):
+            parts = command.split(maxsplit=1)
+
+            if len(parts) == 1:
+                # No args - show current model
+                await self.append_output(f"{self.GRAY}Current model: {self.model}{self.RESET}\n\n")
+            else:
+                # Switch model
+                model_name = parts[1].strip()
+                try:
+                    new_model = LLM(model_name)
+
+                    # Update workspace settings
+                    self.workspace_config.update_model(new_model)
+
+                    # Recreate provider and agent
+                    provider = AzureOpenAIProvider(model=new_model)
+                    old_history = self.agent.conversation_history
+                    self.agent = CodeAgent(
+                        provider, on_conversation_update=self._on_conversation_update
+                    )
+                    self.agent.conversation_history = old_history
+
+                    self.model = new_model
+
+                    await self.append_output(
+                        f"{self.GRAY}✓ Switched to model: {new_model}{self.RESET}\n\n"
+                    )
+                except ValueError:
+                    await self.append_output(
+                        f"{self.GRAY}✗ Invalid model: {model_name}\n"
+                        f"Use /models to see available models.{self.RESET}\n\n"
+                    )
 
         elif cmd == "/models":
-            await self.append_output(f"{self.GRAY}Available providers:\n")
-            from src.providers import ProviderFactory
+            await self.append_output(f"{self.GRAY}Available models:\n")
 
-            for provider in ProviderFactory.list_providers():
-                await self.append_output(f"  • {provider}\n")
-            await self.append_output(f"{self.RESET}\n")
+            openai_models = [m for m in LLM if "gpt" in m.value.lower()]
+            anthropic_models = [m for m in LLM if "claude" in m.value.lower()]
+            deepseek_models = [m for m in LLM if "deepseek" in m.value.lower()]
+
+            if openai_models:
+                await self.append_output("  OpenAI:\n")
+                for model in openai_models:
+                    marker = "→ " if model == self.model else "  "
+                    await self.append_output(f"    {marker}{model.value}\n")
+
+            if anthropic_models:
+                await self.append_output("  Anthropic:\n")
+                for model in anthropic_models:
+                    marker = "→ " if model == self.model else "  "
+                    await self.append_output(f"    {marker}{model.value}\n")
+
+            if deepseek_models:
+                await self.append_output("  DeepSeek:\n")
+                for model in deepseek_models:
+                    marker = "→ " if model == self.model else "  "
+                    await self.append_output(f"    {marker}{model.value}\n")
+
+            await self.append_output(f"\nUse /model <model_value> to switch{self.RESET}\n\n")
 
         else:
             await self.append_output(f"{self.GRAY}Unknown command: {command}\n")

@@ -5,10 +5,16 @@ from src.providers.models import Message
 class CodeAgent:
     """Main agent that coordinates LLM and tools"""
 
-    def __init__(self, provider: LLMProvider, system_prompt: str | None = None):
+    def __init__(
+        self,
+        provider: LLMProvider,
+        system_prompt: str | None = None,
+        on_conversation_update: callable | None = None,
+    ):
         self.provider = provider
         self.system_prompt = system_prompt or self._default_system_prompt()
         self.conversation_history: list[Message] = []
+        self.on_conversation_update = on_conversation_update
 
     def _default_system_prompt(self) -> str:
         return """You are a helpful coding assistant whose name is Bob. You help the user with:
@@ -41,6 +47,10 @@ Be concise and practical in your responses."""
         # Add to history
         self.conversation_history.append(Message(role="assistant", content=response))
 
+        # Trigger save callback
+        if self.on_conversation_update:
+            self.on_conversation_update(self.conversation_history)
+
         return response
 
     async def stream_chat(self, user_input: str):
@@ -59,6 +69,10 @@ Be concise and practical in your responses."""
 
         # Add complete response to history
         self.conversation_history.append(Message(role="assistant", content=full_response))
+
+        # Trigger save callback
+        if self.on_conversation_update:
+            self.on_conversation_update(self.conversation_history)
 
     def clear_history(self):
         """Clear conversation history"""
