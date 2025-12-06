@@ -30,6 +30,10 @@ class ANSILexer(Lexer):
 
 
 class CodeAgentTUI:
+    # ANSI color codes for consistent styling
+    GRAY = "\x1b[38;2;152;151;151m"  # #989797 for Bob's responses
+    RESET = "\x1b[0m"
+
     def __init__(self, provider: LLMProvider, model: LLM = LLM.GPT_4o_mini):
         provider = AzureOpenAIProvider(model=model)
         self.agent = CodeAgent(provider)
@@ -95,6 +99,8 @@ class CodeAgentTUI:
         # ANSI color codes - 256-color palette
         BLUE = "\x1b[38;5;75m"  # Light blue (#6b9bd1 equivalent)
         RESET = "\x1b[0m"
+        # Response color constant (defined here for easy access in other methods)
+        # GRAY = "\x1b[38;2;152;151;151m"  # #989797 in true color
 
         return f"""{BLUE}
   ██████╗  ██████╗ ██████╗
@@ -203,8 +209,9 @@ class CodeAgentTUI:
         # Show user's message
         await self.append_output(f"  > {user_text}\n\n  ")
 
-        # Stream agent response
+        # Stream agent response with gray color
         self.is_streaming = True
+        await self.append_output(self.GRAY)  # Start gray color for Bob's response
 
         try:
             async for chunk in self.agent.stream_chat(user_text):
@@ -220,9 +227,9 @@ class CodeAgentTUI:
                     else:
                         await asyncio.sleep(0.003)
         except Exception as e:
-            await self.append_output(f"\n\n❌ Error: {str(e)}\n")
+            await self.append_output(f"{self.RESET}\n\n❌ Error: {str(e)}\n")
 
-        await self.append_output("\n\n  " + "─" * 60 + "\n\n")
+        await self.append_output(f"{self.RESET}")
         self.is_streaming = False
 
         # Update token count (approximate)
@@ -235,33 +242,33 @@ class CodeAgentTUI:
         if cmd == "/clear":
             self.agent.clear_history()
             self.token_count = 0
-            await self.append_output("✓ Conversation history cleared.\n\n")
+            await self.append_output(f"{self.GRAY}✓ Conversation history cleared.{self.RESET}\n\n")
 
         elif cmd == "/help":
             await self.append_output(self._welcome_message())
-            await self.append_output("Available commands:\n")
+            await self.append_output(f"{self.GRAY}Available commands:\n")
             for cmd, desc in self.commands.items():
                 await self.append_output(f"  {cmd:12} - {desc}\n")
-            await self.append_output("\n")
+            await self.append_output(f"{self.RESET}\n")
 
         elif cmd == "/exit" or cmd == "/quit":
             self.app.exit()
 
         elif cmd == "/model":
-            await self.append_output(f"Current provider: {self.provider_name}\n")
-            await self.append_output(f"Current model: {self.model}\n\n")
+            await self.append_output(f"{self.GRAY}Current provider: {self.provider_name}\n")
+            await self.append_output(f"Current model: {self.model}{self.RESET}\n\n")
 
         elif cmd == "/models":
-            await self.append_output("Available providers:\n")
+            await self.append_output(f"{self.GRAY}Available providers:\n")
             from src.providers import ProviderFactory
 
             for provider in ProviderFactory.list_providers():
                 await self.append_output(f"  • {provider}\n")
-            await self.append_output("\n")
+            await self.append_output(f"{self.RESET}\n")
 
         else:
-            await self.append_output(f"Unknown command: {command}\n")
-            await self.append_output("Type /help for available commands.\n\n")
+            await self.append_output(f"{self.GRAY}Unknown command: {command}\n")
+            await self.append_output(f"Type /help for available commands.{self.RESET}\n\n")
 
     @Condition
     def show_suggestions(self):
