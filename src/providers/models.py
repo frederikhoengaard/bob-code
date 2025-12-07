@@ -12,9 +12,9 @@ class LLM(StrEnum):
     GPT_4o = "gpt-4o-2024-08-06"
     GPT_4o_mini = "gpt-4o-mini-2024-07-18"
     # Anthropic
-    ClaudeOpus = ""
+    ClaudeOpus = "claude-opus-4-5-20251101"
     ClaudeSonnet = "claude-sonnet-4-5-20250929"
-    ClaudeHaiku = ""
+    ClaudeHaiku = "claude-haiku-4-5-20251001"
     # Deepseek
     DeepSeekR1 = "deepseek-r1"
 
