@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 from openai import AsyncAzureOpenAI
 
 from .base import LLMProvider
-from .models import LLM, Message, StreamChunk
+from .models import LLM, FunctionCall, Message, StreamChunk, ToolCall
 
 
 class AzureOpenAIProvider(LLMProvider):
@@ -16,21 +16,78 @@ class AzureOpenAIProvider(LLMProvider):
             azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
         )
 
-    async def generate(self, messages: list[Message], **kwargs) -> str:
-        openai_messages = [{"role": m.role, "content": m.content} for m in messages]
+    def _convert_messages(self, messages: list[Message]) -> list[dict]:
+        """Convert unified Message format to OpenAI format including tool fields"""
+        result = []
+        for msg in messages:
+            openai_msg = {"role": msg.role}
 
-        response = await self.client.chat.completions.create(
-            model=self.model,
-            messages=openai_messages,
-            max_tokens=kwargs.get("max_tokens", 4096),
-            temperature=kwargs.get("temperature", 0.7),
-        )
+            if msg.content:
+                openai_msg["content"] = msg.content
 
-        return response.choices[0].message.content
+            if msg.tool_calls:
+                openai_msg["tool_calls"] = [
+                    {
+                        "id": tc.id,
+                        "type": tc.type,
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                    }
+                    for tc in msg.tool_calls
+                ]
 
-    async def stream(self, messages: list[Message], **kwargs) -> AsyncIterator[StreamChunk]:
-        openai_messages = [{"role": m.role, "content": m.content} for m in messages]
+            if msg.tool_call_id:
+                openai_msg["tool_call_id"] = msg.tool_call_id
 
+            if msg.name:
+                openai_msg["name"] = msg.name
+
+            result.append(openai_msg)
+
+        return result
+
+    async def generate(self, messages: list[Message], tools: list = None, **kwargs) -> Message:
+        """Generate a complete response, optionally with tool calling support"""
+        openai_messages = self._convert_messages(messages)
+
+        params = {
+            "model": self.model,
+            "messages": openai_messages,
+            "max_tokens": kwargs.get("max_tokens", 4096),
+            "temperature": kwargs.get("temperature", 0.7),
+        }
+
+        # Add tools if provided
+        if tools:
+            params["tools"] = [t.model_dump() for t in tools]
+
+        response = await self.client.chat.completions.create(**params)
+
+        choice = response.choices[0]
+        message = choice.message
+
+        # Convert to unified Message format
+        result = Message(role="assistant", content=message.content)
+
+        # Parse tool calls if present
+        if message.tool_calls:
+            result.tool_calls = [
+                ToolCall(
+                    id=tc.id,
+                    type=tc.type,
+                    function=FunctionCall(name=tc.function.name, arguments=tc.function.arguments),
+                )
+                for tc in message.tool_calls
+            ]
+
+        return result
+
+    async def stream(
+        self, messages: list[Message], tools: list = None, **kwargs
+    ) -> AsyncIterator[StreamChunk]:
+        """Stream response chunks. Note: Tool calling is not supported in streaming mode."""
+        openai_messages = self._convert_messages(messages)
+
+        # Note: We don't pass tools in streaming mode as it complicates handling
         stream = await self.client.chat.completions.create(
             model=self.model,
             messages=openai_messages,

@@ -1,4 +1,5 @@
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -19,15 +20,35 @@ class LLM(StrEnum):
     DeepSeekR1 = "deepseek-r1"
 
 
-class Message(BaseModel):
-    """Unified message format across providers"""
+class FunctionCall(BaseModel):
+    """Function call details"""
 
-    role: str  # "user", "assistant", "system"
-    content: str
+    name: str
+    arguments: str  # JSON string of arguments
+
+
+class ToolCall(BaseModel):
+    """A tool call from the LLM"""
+
+    id: str
+    type: Literal["function"] = "function"
+    function: FunctionCall
+
+
+class Message(BaseModel):
+    """Unified message format across providers - backward compatible"""
+
+    role: str  # "user", "assistant", "system", "tool"
+    content: str | None = None
+
+    # Tool-related fields (optional for backward compatibility)
+    tool_calls: list["ToolCall"] | None = None
+    tool_call_id: str | None = None  # For tool response messages
+    name: str | None = None  # Tool name for tool response messages
 
 
 class StreamChunk(BaseModel):
     """A chunk of streamed response"""
 
-    content: str
+    content: str | None = None
     finish_reason: str | None = None
