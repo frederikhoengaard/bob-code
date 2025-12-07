@@ -8,7 +8,8 @@ dependencies = [
   "anthropic~=0.75",
   "pydantic~=2.12",
   "rich~=13.0",
-  "python-dotenv~=1.2"
+  "python-dotenv~=1.2",
+  "pathspec~=0.12.0"
 ]
 
 [project.optional-dependencies]

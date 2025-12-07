@@ -41,6 +41,8 @@ mdurl==0.1.2
     # via markdown-it-py
 openai==2.9.0
     # via bob-code (pyproject.toml)
+pathspec==0.12.1
+    # via bob-code (pyproject.toml)
 prompt-toolkit==3.0.52
     # via bob-code (pyproject.toml)
 pydantic==2.12.5

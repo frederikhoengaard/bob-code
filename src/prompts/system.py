@@ -18,6 +18,7 @@ When needed, you have access to these tools:
 **read** - Read file contents from the workspace
 - Use this to examine files before making changes
 - Example: To understand code structure, read relevant files first
+- Note: Cannot read files excluded by .gitignore (saves tokens and respects project structure)
 
 **write** - Create or overwrite files in the workspace
 - Use this to implement changes, create new files, or generate documentation
