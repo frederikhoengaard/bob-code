@@ -1,7 +1,7 @@
 import asyncio
 
 from prompt_toolkit import Application
-from prompt_toolkit.filters import Condition
+from prompt_toolkit.filters import Condition, has_focus
 from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import (
@@ -123,7 +123,6 @@ class CodeAgentTUI:
                 buffer=self.conversation_buffer,
                 lexer=ANSILexer(),
                 focusable=True,
-                focus_on_click=False,  # Don't steal focus when clicked - allows text selection without losing input focus
             ),
             wrap_lines=True,
             right_margins=[ScrollbarMargin(display_arrows=True)],
@@ -608,6 +607,16 @@ Be thorough but concise - focus on what's most useful for developers."""
             # Return focus to input area
             event.app.layout.focus(self.input_area)
 
+        # Redirect any printable character to input area when conversation is focused
+        @global_kb.add("<any>", filter=has_focus(self.conversation_buffer))
+        def _(event):
+            # When typing in the conversation area, redirect to input area
+            if event.data and len(event.data) == 1 and event.data.isprintable():
+                # Focus input area
+                event.app.layout.focus(self.input_area)
+                # Insert the typed character
+                self.input_area.buffer.insert_text(event.data)
+
         self.global_keybindings = global_kb
 
     async def append_output(self, text: str):
@@ -888,7 +897,7 @@ Be thorough but concise - focus on what's most useful for developers."""
             layout=self.create_layout(),
             key_bindings=self.global_keybindings,
             full_screen=True,
-            mouse_support=True,
+            mouse_support=False,  # Disable to allow terminal-native text selection and copying
         )
 
         # Focus input area by default
