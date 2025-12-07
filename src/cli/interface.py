@@ -4,9 +4,9 @@ from prompt_toolkit import Application
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout import FormattedTextControl, HSplit, Layout, Window
+from prompt_toolkit.layout import ConditionalContainer, FormattedTextControl, HSplit, Layout, Window
 from prompt_toolkit.lexers import Lexer
-from prompt_toolkit.widgets import TextArea
+from prompt_toolkit.widgets import RadioList, TextArea
 
 from src.agent import CodeAgent
 from src.providers import AzureOpenAIProvider, LLMProvider
@@ -62,6 +62,7 @@ class CodeAgentTUI:
         # Available commands
         self.commands = {
             "/clear": "Clear conversation history",
+            "/conversations": "List previous conversations",
             "/help": "Show help message",
             "/exit": "Exit the application",
             "/quit": "Exit the application",
@@ -98,6 +99,9 @@ class CodeAgentTUI:
             dont_extend_height=True,
         )
 
+        # Conversation selector (RadioList) - needs at least one value
+        self.conversation_radio_list = RadioList(values=[("", "Loading...")])
+
         # Info bar at bottom
         self.info_control = FormattedTextControl(text=self._get_info_text)
         self.info_window = Window(
@@ -108,6 +112,13 @@ class CodeAgentTUI:
 
         # Bind input changes to update suggestions
         self.input_area.buffer.on_text_changed += self._on_input_changed
+
+        # Conversation selector state
+        self.showing_selector = False
+        self.selector_radio_list = None
+
+        # Create filter conditions
+        self._create_conditions()
 
         self.setup_keybindings()
         self.app = None
@@ -142,6 +153,77 @@ class CodeAgentTUI:
             import sys
 
             print(f"Warning: Could not save conversation: {e}", file=sys.stderr)
+
+    async def _load_conversation(self, filename: str):
+        """Load a conversation and restore it to the current session"""
+        try:
+            conversation = self.persistence.load_conversation(filename)
+
+            # Clear current conversation display
+            self.conversation_area.text = self._welcome_message()
+
+            # Restore messages to agent
+            self.agent.conversation_history = conversation.messages.copy()
+
+            # Update current conversation file to the loaded one
+            self.current_conversation_file = filename
+
+            # Display loaded conversation
+            await self.append_output(
+                f"{self.GRAY}✓ Loaded conversation: {conversation.metadata.title or filename}{self.RESET}\n\n"
+            )
+
+            # Replay conversation in display
+            for msg in conversation.messages:
+                if msg.role == "user":
+                    await self.append_output(f"  > {msg.content}\n\n  ")
+                elif msg.role == "assistant":
+                    await self.append_output(f"{self.GRAY}{msg.content}{self.RESET}\n\n")
+
+        except Exception as e:
+            await self.append_output(f"{self.RESET}\n\n❌ Error loading conversation: {str(e)}\n")
+
+    async def _show_conversation_selector(self):
+        """Show interactive conversation selector at bottom of screen"""
+        from datetime import datetime
+
+        conversations = self.persistence.list_conversations()
+
+        if not conversations:
+            await self.append_output(f"{self.GRAY}No previous conversations found.{self.RESET}\n\n")
+            return
+
+        # Format conversations for RadioList
+        radio_values = []
+        for filename, metadata in conversations:
+            started_at = datetime.fromisoformat(metadata.started_at)
+            now = datetime.now()
+            delta = now - started_at
+
+            # Format relative time
+            if delta.days > 0:
+                time_str = f"{delta.days} day{'s' if delta.days != 1 else ''} ago"
+            elif delta.seconds >= 3600:
+                hours = delta.seconds // 3600
+                time_str = f"{hours} hour{'s' if hours != 1 else ''} ago"
+            elif delta.seconds >= 60:
+                minutes = delta.seconds // 60
+                time_str = f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+            else:
+                time_str = "just now"
+
+            title = metadata.title or "Untitled conversation"
+            message_count = metadata.message_count
+
+            label = f"{title}\n   {time_str} · {message_count} messages"
+            radio_values.append((filename, label))
+
+        # Update RadioList values
+        self.conversation_radio_list.values = radio_values
+
+        # Show selector and focus it
+        self.showing_selector = True
+        self.app.layout.focus(self.conversation_radio_list)
 
     def _welcome_message(self) -> str:
         """Generate welcome screen with ASCII art logo and ANSI colors."""
@@ -223,8 +305,17 @@ class CodeAgentTUI:
 
         @kb.add("enter")
         def _(event):
+            # If selector is showing and focused, load selected conversation
+            if self.showing_selector and event.app.layout.has_focus(self.conversation_radio_list):
+                selected_filename = self.conversation_radio_list.current_value
+                if selected_filename:
+                    self.showing_selector = False
+                    # Return focus to input
+                    event.app.layout.focus(self.input_area)
+                    # Load conversation
+                    asyncio.create_task(self._load_conversation(selected_filename))
             # Process input when user presses Enter
-            if not self.is_streaming:
+            elif not self.is_streaming:
                 asyncio.create_task(self.process_input())
 
         @kb.add("c-c")
@@ -234,9 +325,13 @@ class CodeAgentTUI:
 
         @kb.add("escape")
         def _(event):
-            # Clear input on Escape and focus input area
+            # If selector is showing, cancel it
+            if self.showing_selector:
+                self.showing_selector = False
+                # Return focus to input area
+                event.app.layout.focus(self.input_area)
+            # Clear input on Escape
             self.input_area.text = ""
-            event.app.layout.focus(self.input_area)
 
         self.input_area.control.key_bindings = kb
 
@@ -251,6 +346,34 @@ class CodeAgentTUI:
         @global_kb.add("c-down")
         def _(event):
             # Focus input area (for typing)
+            event.app.layout.focus(self.input_area)
+
+        @global_kb.add("enter", filter=self.show_selector_condition, eager=True)
+        def _(event):
+            # Load selected conversation when Enter is pressed in selector
+            # RadioList stores selection in _selected_index
+            if hasattr(self.conversation_radio_list, "_selected_index"):
+                selected_idx = self.conversation_radio_list._selected_index
+
+                if selected_idx is not None and 0 <= selected_idx < len(
+                    self.conversation_radio_list.values
+                ):
+                    selected_filename, _ = self.conversation_radio_list.values[selected_idx]
+
+                    if (
+                        selected_filename and selected_filename != ""
+                    ):  # Ignore the dummy "Loading..." entry
+                        self.showing_selector = False
+                        # Return focus to input
+                        event.app.layout.focus(self.input_area)
+                        # Load conversation
+                        asyncio.create_task(self._load_conversation(selected_filename))
+
+        @global_kb.add("escape", filter=self.show_selector_condition)
+        def _(event):
+            # Cancel selector when Escape is pressed
+            self.showing_selector = False
+            # Return focus to input area
             event.app.layout.focus(self.input_area)
 
         self.global_keybindings = global_kb
@@ -319,6 +442,9 @@ class CodeAgentTUI:
             )
 
             await self.append_output(f"{self.GRAY}✓ Conversation history cleared.{self.RESET}\n\n")
+
+        elif cmd == "/conversations":
+            await self._show_conversation_selector()
 
         elif cmd == "/help":
             await self.append_output(self._welcome_message())
@@ -395,10 +521,10 @@ class CodeAgentTUI:
             await self.append_output(f"{self.GRAY}Unknown command: {command}\n")
             await self.append_output(f"Type /help for available commands.{self.RESET}\n\n")
 
-    @Condition
-    def show_suggestions(self):
-        """Condition to show suggestions window"""
-        return bool(self.suggestions_text)
+    def _create_conditions(self):
+        """Create filter conditions"""
+        self.show_suggestions_condition = Condition(lambda: bool(self.suggestions_text))
+        self.show_selector_condition = Condition(lambda: self.showing_selector)
 
     def create_layout(self):
         """Create the TUI layout"""
@@ -413,12 +539,27 @@ class CodeAgentTUI:
                     self.input_area,
                     # Horizontal line separator
                     Window(height=1, char="─"),
-                    # Command suggestions (only shown when typing /)
-                    HSplit(
-                        [
-                            self.suggestions_window,
-                        ],
-                        # filter=self.show_suggestions,
+                    # Command suggestions (only shown when typing / and selector not showing)
+                    ConditionalContainer(
+                        self.suggestions_window,
+                        filter=~self.show_selector_condition,  # Hide when selector is showing
+                    ),
+                    # Conversation selector (shown when /conversations is active)
+                    ConditionalContainer(
+                        HSplit(
+                            [
+                                Window(
+                                    FormattedTextControl(text="Resume Session\n"),
+                                    height=2,
+                                ),
+                                self.conversation_radio_list,
+                                Window(
+                                    FormattedTextControl(text="\nEnter to load · Esc to cancel"),
+                                    height=2,
+                                ),
+                            ]
+                        ),
+                        filter=self.show_selector_condition,
                     ),
                     # Info bar at bottom
                     self.info_window,
