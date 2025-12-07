@@ -563,6 +563,23 @@ Be thorough but concise - focus on what's most useful for developers."""
             # Clear input on Escape
             self.input_area.text = ""
 
+        @kb.add("tab")
+        def _(event):
+            # Tab completion for commands
+            text = self.input_area.text
+            if text.startswith("/"):
+                # Find matching commands
+                query = text[1:].lower()
+                matching_commands = [
+                    cmd for cmd in self.commands.keys() if cmd[1:].lower().startswith(query)
+                ]
+
+                # If exactly one match, autocomplete it
+                if len(matching_commands) == 1:
+                    self.input_area.text = matching_commands[0] + " "
+                    # Move cursor to end
+                    self.input_area.buffer.cursor_position = len(self.input_area.text)
+
         self.input_area.control.key_bindings = kb
 
         # Global key bindings for focus management
