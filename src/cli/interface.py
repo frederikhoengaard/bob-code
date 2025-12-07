@@ -148,6 +148,12 @@ class CodeAgentTUI:
         self.is_streaming = False
         self.token_count = 0
 
+        # Working state tracking for pulsating counter
+        self.is_working = False
+        self.working_counter = 0
+        self.base_output_length = 0
+        self.tool_call_output = ""
+
     def _initialize_workspace_if_needed(self):
         """Initialize workspace if .bob/ doesn't exist"""
         try:
@@ -178,7 +184,10 @@ class CodeAgentTUI:
             print(f"Warning: Could not save conversation: {e}", file=sys.stderr)
 
     async def _on_tool_call(self, tool_calls, tool_results):
-        """Callback when tools are called - display in UI"""
+        """Callback when tools are called - accumulate output and update display"""
+        if not self.is_working:
+            return
+
         if tool_results is None:
             # Tools are about to be executed
             for tc in tool_calls:
@@ -192,9 +201,9 @@ class CodeAgentTUI:
                 except Exception:
                     args_str = "..."
 
-                await self.append_output(f"{self.GRAY}  🔧 {tool_name}({args_str})\n")
+                self.tool_call_output += f"{self.GRAY}  🔧 {tool_name}({args_str})\n"
         else:
-            # Tools have been executed, show results
+            # Tools have been executed, accumulate results
             for result in tool_results:
                 status = "✓" if not result.is_error else "✗"
                 # Truncate long results for display
@@ -202,9 +211,32 @@ class CodeAgentTUI:
                 if len(result.content) > 100:
                     result_preview += "..."
 
-                await self.append_output(
+                self.tool_call_output += (
                     f"{self.GRAY}  {status} {result.tool_name}: {result_preview}{self.RESET}\n\n"
                 )
+
+        # Update the display with current state
+        self._update_working_display()
+
+    def _update_working_display(self):
+        """Update the output area with working indicator and tool output"""
+        if not self.is_working:
+            return
+
+        # Build display: base output + working indicator + tool output
+        base = self.conversation_area.text[: self.base_output_length]
+        working = f"{self.GRAY}  ⚡ Bob is working... ({self.working_counter}){self.RESET}\n\n"
+
+        self.conversation_area.text = base + working + self.tool_call_output
+        # Auto-scroll to bottom
+        self.conversation_area.buffer.cursor_position = len(self.conversation_area.text)
+
+    async def _increment_counter(self):
+        """Background task to increment working counter"""
+        while self.is_working:
+            await asyncio.sleep(1)
+            self.working_counter += 1
+            self._update_working_display()
 
     async def _load_conversation(self, filename: str):
         """Load a conversation and restore it to the current session"""
@@ -575,14 +607,39 @@ Be thorough but concise - focus on what's most useful for developers."""
 
         # Use non-streaming chat when tools are available
         if self.agent.tool_registry:
-            # Show working indicator
-            await self.append_output(f"{self.GRAY}  ⚡ Bob is working...\n\n")
+            # Set up working state
+            self.is_working = True
+            self.working_counter = 0
+            self.base_output_length = len(self.conversation_area.text)
+            self.tool_call_output = ""
+
+            # Start counter task
+            counter_task = asyncio.create_task(self._increment_counter())
+
+            # Show initial working indicator
+            self._update_working_display()
 
             try:
                 response = await self.agent.chat(user_text)
-                # Clear working indicator and show response
+
+                # Stop working state
+                self.is_working = False
+                counter_task.cancel()
+
+                # Remove working indicator, keep tool output, add response
+                base = self.conversation_area.text[: self.base_output_length]
+                self.conversation_area.text = base + self.tool_call_output
+
                 await self.append_output(f"{self.GRAY}{response}{self.RESET}\n\n")
             except Exception as e:
+                # Stop working state
+                self.is_working = False
+                counter_task.cancel()
+
+                # Remove working indicator, keep tool output
+                base = self.conversation_area.text[: self.base_output_length]
+                self.conversation_area.text = base + self.tool_call_output
+
                 await self.append_output(f"{self.RESET}\n\n❌ Error: {str(e)}\n\n")
         else:
             # Stream agent response with gray color (no tools available)

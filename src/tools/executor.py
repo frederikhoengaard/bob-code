@@ -1,7 +1,8 @@
 import asyncio
 import json
 
-from src.tools.base import ToolCall, ToolResult
+from src.providers.models import ToolCall
+from src.tools.base import ToolResult
 from src.tools.registry import ToolRegistry
 from src.workspace.config import ToolPermissions
 
