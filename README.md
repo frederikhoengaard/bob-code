@@ -1,10 +1,11 @@
+```
 ██████╗  ██████╗ ██████╗
 ██╔══██╗██╔═══██╗██╔══██╗
 ██████╔╝██║   ██║██████╔╝
 ██╔══██╗██║   ██║██╔══██╗
 ██████╔╝╚██████╔╝██████╔╝
 ╚═════╝  ╚═════╝ ╚═════╝
-
+```
 # Bob Code
 
 **Bob** is a Terminal User Interface (TUI) AI coding assistant that brings the power of multiple LLM providers directly into your terminal. With agentic tool-calling capabilities, Bob can read, write, and execute commands in your workspace autonomously.
