@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from src.tools.base import BaseTool
+from src.utils.gitignore import GitignoreFilter
 
 
 class ReadTool(BaseTool):
@@ -56,6 +57,11 @@ class ReadTool(BaseTool):
 
             if not resolved_path.is_file():
                 return f"Error: Path is not a file: {file_path}"
+
+            # Check gitignore - prevent reading gitignored files
+            gitignore = GitignoreFilter(workspace_root)
+            if gitignore.should_ignore(resolved_path):
+                return f"Error: Cannot read '{file_path}' - file is excluded by .gitignore"
 
             content = resolved_path.read_text()
 

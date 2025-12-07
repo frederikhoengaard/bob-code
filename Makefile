@@ -17,7 +17,7 @@ install: venv
 # Lock dependencies from pyproject.toml
 lock:
 	@echo "🔐 Locking dependencies..."
-	uv pip compile --output requirements.lock
+	uv pip compile pyproject.toml -o requirements.lock
 
 # Run your app (edit entry point as needed)
 run:

@@ -14,12 +14,14 @@ class CodeAgent:
         tool_registry=None,
         tool_permissions=None,
         on_tool_call: callable | None = None,
+        is_subagent: bool = False,
     ):
         self.provider = provider
         self.system_prompt = system_prompt or self._default_system_prompt()
         self.conversation_history: list[Message] = []
         self.on_conversation_update = on_conversation_update
         self.on_tool_call = on_tool_call
+        self.is_subagent = is_subagent
 
         # Tool support
         self.tool_registry = tool_registry
