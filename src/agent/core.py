@@ -1,3 +1,4 @@
+from src.prompts import SYSTEM_PROMPT_BASIC
 from src.providers import LLMProvider
 from src.providers.models import Message
 
@@ -17,13 +18,7 @@ class CodeAgent:
         self.on_conversation_update = on_conversation_update
 
     def _default_system_prompt(self) -> str:
-        return """You are a helpful coding assistant whose name is Bob. You help the user with:
-- Writing code
-- Debugging issues
-- Explaining concepts
-- Suggesting best practices
-
-Be concise and practical in your responses."""
+        return SYSTEM_PROMPT_BASIC
 
     async def chat(self, user_input: str) -> str:
         """
