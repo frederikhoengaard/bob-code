@@ -1,6 +1,7 @@
 import asyncio
 
 from prompt_toolkit import Application
+from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.filters import Condition, has_focus
 from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.key_binding import KeyBindings
@@ -9,12 +10,10 @@ from prompt_toolkit.layout import (
     FormattedTextControl,
     HSplit,
     Layout,
-    ScrollOffsets,
     Window,
 )
 from prompt_toolkit.layout.controls import BufferControl
 from prompt_toolkit.layout.margins import ScrollbarMargin
-from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.lexers import Lexer
 from prompt_toolkit.widgets import RadioList, TextArea
 
