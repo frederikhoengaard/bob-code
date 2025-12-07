@@ -4,7 +4,17 @@ from prompt_toolkit import Application
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout import ConditionalContainer, FormattedTextControl, HSplit, Layout, Window
+from prompt_toolkit.layout import (
+    ConditionalContainer,
+    FormattedTextControl,
+    HSplit,
+    Layout,
+    ScrollOffsets,
+    Window,
+)
+from prompt_toolkit.layout.controls import BufferControl
+from prompt_toolkit.layout.margins import ScrollbarMargin
+from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.lexers import Lexer
 from prompt_toolkit.widgets import RadioList, TextArea
 
@@ -94,14 +104,30 @@ class CodeAgentTUI:
         }
 
         # Conversation area (includes welcome message, then conversations)
-        self.conversation_area = TextArea(
-            text=self._welcome_message(),
+        # Use Buffer + Window instead of TextArea to support line prefixes for wrapped lines
+        # Use a flag to control read_only state
+        self._conversation_read_only = True
+
+        self.conversation_buffer = Buffer(
+            document=None,
+            read_only=Condition(lambda: self._conversation_read_only),
             multiline=True,
-            scrollbar=True,
-            focusable=True,
-            read_only=True,
+        )
+        # Set initial text (temporarily disable read_only)
+        self._conversation_read_only = False
+        self.conversation_buffer.text = self._welcome_message()
+        self._conversation_read_only = True
+
+        self.conversation_area = Window(
+            content=BufferControl(
+                buffer=self.conversation_buffer,
+                lexer=ANSILexer(),
+                focusable=True,
+                focus_on_click=False,  # Don't steal focus when clicked - allows text selection without losing input focus
+            ),
             wrap_lines=True,
-            lexer=ANSILexer(),
+            right_margins=[ScrollbarMargin(display_arrows=True)],
+            get_line_prefix=lambda line_number, wrap_count: "  ",
         )
 
         # Input area
@@ -201,7 +227,7 @@ class CodeAgentTUI:
                 except Exception:
                     args_str = "..."
 
-                self.tool_call_output += f"{self.GRAY}  🔧 {tool_name}({args_str})\n"
+                self.tool_call_output += f"{self.GRAY}🔧 {tool_name}({args_str})\n"
         else:
             # Tools have been executed, accumulate results
             for result in tool_results:
@@ -212,7 +238,7 @@ class CodeAgentTUI:
                     result_preview += "..."
 
                 self.tool_call_output += (
-                    f"{self.GRAY}  {status} {result.tool_name}: {result_preview}{self.RESET}\n\n"
+                    f"{self.GRAY}{status} {result.tool_name}: {result_preview}{self.RESET}\n\n"
                 )
 
         # Update the display with current state
@@ -224,12 +250,13 @@ class CodeAgentTUI:
             return
 
         # Build display: base output + working indicator + tool output
-        base = self.conversation_area.text[: self.base_output_length]
-        working = f"{self.GRAY}  ⚡ Bob is working... ({self.working_counter}){self.RESET}\n\n"
+        base = self.conversation_buffer.text[: self.base_output_length]
+        working = f"{self.GRAY}⚡ Bob is working... ({self.working_counter}){self.RESET}\n\n"
 
-        self.conversation_area.text = base + working + self.tool_call_output
-        # Auto-scroll to bottom
-        self.conversation_area.buffer.cursor_position = len(self.conversation_area.text)
+        self._conversation_read_only = False
+        self.conversation_buffer.text = base + working + self.tool_call_output
+        self._conversation_read_only = True
+        # Don't auto-scroll during updates - let user control scroll position while waiting
 
     async def _increment_counter(self):
         """Background task to increment working counter"""
@@ -244,7 +271,9 @@ class CodeAgentTUI:
             conversation = self.persistence.load_conversation(filename)
 
             # Clear current conversation display
-            self.conversation_area.text = self._welcome_message()
+            self._conversation_read_only = False
+            self.conversation_buffer.text = self._welcome_message()
+            self._conversation_read_only = True
 
             # Restore messages to agent
             self.agent.conversation_history = conversation.messages.copy()
@@ -260,7 +289,7 @@ class CodeAgentTUI:
             # Replay conversation in display
             for msg in conversation.messages:
                 if msg.role == "user":
-                    await self.append_output(f"  > {msg.content}\n\n  ")
+                    await self.append_output(f"> {msg.content}\n\n")
                 elif msg.role == "assistant":
                     await self.append_output(f"{self.GRAY}{msg.content}{self.RESET}\n\n")
 
@@ -437,24 +466,24 @@ Be thorough but concise - focus on what's most useful for developers."""
         # GRAY = "\x1b[38;2;152;151;151m"  # #989797 in true color
 
         return f"""{BLUE}
-  ╔═══════════════════════════════════════════════════════════════════════╗
-  ║                                                                       ║
-  ║    {BLUE}██████{RESET}╗  {BLUE}██████{RESET}╗ {BLUE}██████{RESET}╗                                           ║
-  ║    {BLUE}██{RESET}╔══{BLUE}██{RESET}╗{BLUE}██{RESET}╔═══{BLUE}██{RESET}╗{BLUE}██{RESET}╔══{BLUE}██{RESET}╗                                          ║
-  ║    {BLUE}██████{RESET}╔╝{BLUE}██{RESET}║   {BLUE}██{RESET}║{BLUE}██████{RESET}╔╝                                          ║
-  ║    {BLUE}██{RESET}╔══{BLUE}██{RESET}╗{BLUE}██{RESET}║   {BLUE}██{RESET}║{BLUE}██{RESET}╔══{BLUE}██{RESET}╗                                          ║
-  ║    {BLUE}██████╔╝╚{BLUE}██████{RESET}╔╝{BLUE}██████{RESET}╔╝                                          ║
-  ║    {RESET}╚═════╝  ╚═════╝ ╚═════╝                                           ║
-  ║                                                                       ║
-  ║    {BLUE}Welcome back Frederik!{RESET}                                             ║
-  ║                                                                       ║
-  ║    {BLUE}Tips for getting started{RESET}                                           ║
-  ║    Run {BLUE}/init{RESET} to create a BOB.md file with instructions for Bob        ║
-  ║                                                                       ║
-  ║    {BLUE}Recent activity{RESET}                                                    ║
-  ║    No recent activity                                                 ║
-  ║                                                                       ║
-  ╚═══════════════════════════════════════════════════════════════════════╝
+╔═══════════════════════════════════════════════════════════════════════╗
+║                                                                       ║
+║    {BLUE}██████{RESET}╗  {BLUE}██████{RESET}╗ {BLUE}██████{RESET}╗                                           ║
+║    {BLUE}██{RESET}╔══{BLUE}██{RESET}╗{BLUE}██{RESET}╔═══{BLUE}██{RESET}╗{BLUE}██{RESET}╔══{BLUE}██{RESET}╗                                          ║
+║    {BLUE}██████{RESET}╔╝{BLUE}██{RESET}║   {BLUE}██{RESET}║{BLUE}██████{RESET}╔╝                                          ║
+║    {BLUE}██{RESET}╔══{BLUE}██{RESET}╗{BLUE}██{RESET}║   {BLUE}██{RESET}║{BLUE}██{RESET}╔══{BLUE}██{RESET}╗                                          ║
+║    {BLUE}██████╔╝╚{BLUE}██████{RESET}╔╝{BLUE}██████{RESET}╔╝                                          ║
+║    {RESET}╚═════╝  ╚═════╝ ╚═════╝                                           ║
+║                                                                       ║
+║    {BLUE}Welcome back Frederik!{RESET}                                             ║
+║                                                                       ║
+║    {BLUE}Tips for getting started{RESET}                                           ║
+║    Run {BLUE}/init{RESET} to create a BOB.md file with instructions for Bob        ║
+║                                                                       ║
+║    {BLUE}Recent activity{RESET}                                                    ║
+║    No recent activity                                                 ║
+║                                                                       ║
+╚═══════════════════════════════════════════════════════════════════════╝
 {RESET}
 
 """
@@ -583,9 +612,10 @@ Be thorough but concise - focus on what's most useful for developers."""
 
     async def append_output(self, text: str):
         """Add text to conversation area"""
-        self.conversation_area.text += text
-        # Auto-scroll to bottom
-        self.conversation_area.buffer.cursor_position = len(self.conversation_area.text)
+        self._conversation_read_only = False
+        self.conversation_buffer.text += text
+        self.conversation_buffer.cursor_position = len(self.conversation_buffer.text)
+        self._conversation_read_only = True
 
     async def process_input(self):
         """Process user input"""
@@ -603,14 +633,14 @@ Be thorough but concise - focus on what's most useful for developers."""
             return
 
         # Show user's message
-        await self.append_output(f"  > {user_text}\n\n")
+        await self.append_output(f"> {user_text}\n\n")
 
         # Use non-streaming chat when tools are available
         if self.agent.tool_registry:
             # Set up working state
             self.is_working = True
             self.working_counter = 0
-            self.base_output_length = len(self.conversation_area.text)
+            self.base_output_length = len(self.conversation_buffer.text)
             self.tool_call_output = ""
 
             # Start counter task
@@ -627,9 +657,12 @@ Be thorough but concise - focus on what's most useful for developers."""
                 counter_task.cancel()
 
                 # Remove working indicator, keep tool output, add response
-                base = self.conversation_area.text[: self.base_output_length]
-                self.conversation_area.text = base + self.tool_call_output
+                base = self.conversation_buffer.text[: self.base_output_length]
+                self._conversation_read_only = False
+                self.conversation_buffer.text = base + self.tool_call_output
+                self._conversation_read_only = True
 
+                # Response will be indented by get_line_prefix
                 await self.append_output(f"{self.GRAY}{response}{self.RESET}\n\n")
             except Exception as e:
                 # Stop working state
@@ -637,14 +670,16 @@ Be thorough but concise - focus on what's most useful for developers."""
                 counter_task.cancel()
 
                 # Remove working indicator, keep tool output
-                base = self.conversation_area.text[: self.base_output_length]
-                self.conversation_area.text = base + self.tool_call_output
+                base = self.conversation_buffer.text[: self.base_output_length]
+                self._conversation_read_only = False
+                self.conversation_buffer.text = base + self.tool_call_output
+                self._conversation_read_only = True
 
                 await self.append_output(f"{self.RESET}\n\n❌ Error: {str(e)}\n\n")
         else:
             # Stream agent response with gray color (no tools available)
             self.is_streaming = True
-            await self.append_output(f"  {self.GRAY}")
+            await self.append_output(f"{self.GRAY}")
 
             try:
                 async for chunk in self.agent.stream_chat(user_text):
@@ -690,7 +725,7 @@ Be thorough but concise - focus on what's most useful for developers."""
             await self.append_output(self._welcome_message())
             await self.append_output(f"{self.GRAY}Available commands:\n")
             for cmd, desc in self.commands.items():
-                await self.append_output(f"  {cmd:12} - {desc}\n")
+                await self.append_output(f"{cmd:12} - {desc}\n")
             await self.append_output(f"{self.RESET}\n")
 
         elif cmd == "/exit" or cmd == "/quit":
@@ -752,22 +787,22 @@ Be thorough but concise - focus on what's most useful for developers."""
             deepseek_models = [m for m in LLM if "deepseek" in m.value.lower()]
 
             if openai_models:
-                await self.append_output("  OpenAI:\n")
+                await self.append_output("OpenAI:\n")
                 for model in openai_models:
-                    marker = "→ " if model == self.model else "  "
-                    await self.append_output(f"    {marker}{model.value}\n")
+                    marker = "→ " if model == self.model else " "
+                    await self.append_output(f"  {marker}{model.value}\n")
 
             if anthropic_models:
-                await self.append_output("  Anthropic:\n")
+                await self.append_output("Anthropic:\n")
                 for model in anthropic_models:
-                    marker = "→ " if model == self.model else "  "
-                    await self.append_output(f"    {marker}{model.value}\n")
+                    marker = "→ " if model == self.model else " "
+                    await self.append_output(f"  {marker}{model.value}\n")
 
             if deepseek_models:
-                await self.append_output("  DeepSeek:\n")
+                await self.append_output("DeepSeek:\n")
                 for model in deepseek_models:
-                    marker = "→ " if model == self.model else "  "
-                    await self.append_output(f"    {marker}{model.value}\n")
+                    marker = "→ " if model == self.model else " "
+                    await self.append_output(f"  {marker}{model.value}\n")
 
             await self.append_output(f"\nUse /model <model_value> to switch{self.RESET}\n\n")
 
