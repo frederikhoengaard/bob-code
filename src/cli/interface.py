@@ -42,12 +42,16 @@ class CodeAgentTUI:
         self._initialize_workspace_if_needed()
 
         # Load model from settings (overrides default)
+        permissions = None
         try:
             settings = self.workspace_config.load_settings()
             model = LLM(settings.model)
+            permissions = settings.permissions
         except (FileNotFoundError, ValueError):
-            # Use default model if settings don't exist or invalid
-            pass
+            # Use default model/permissions if settings don't exist or invalid
+            from src.workspace.config import ToolPermissions
+
+            permissions = ToolPermissions()  # All disabled by default
 
         provider = AzureOpenAIProvider(model=model)
 
@@ -55,8 +59,23 @@ class CodeAgentTUI:
         self.persistence = ConversationPersistence(self.workspace_config)
         self.current_conversation_file = self.persistence.start_new_conversation(str(model))
 
-        # Create agent with save callback
-        self.agent = CodeAgent(provider, on_conversation_update=self._on_conversation_update)
+        # Initialize tool registry
+        from src.tools.implementations import BashTool, ReadTool, WriteTool
+        from src.tools.registry import ToolRegistry
+
+        self.tool_registry = ToolRegistry()
+        self.tool_registry.register(ReadTool())
+        self.tool_registry.register(WriteTool())
+        self.tool_registry.register(BashTool())
+
+        # Create agent with tools and save callback
+        self.agent = CodeAgent(
+            provider,
+            on_conversation_update=self._on_conversation_update,
+            tool_registry=self.tool_registry,
+            tool_permissions=permissions,
+            on_tool_call=self._on_tool_call,
+        )
         self.model = model or provider.model
 
         # Available commands
@@ -68,6 +87,10 @@ class CodeAgentTUI:
             "/quit": "Exit the application",
             "/model": "Show current model info",
             "/models": "List available models",
+            "/init": "Generate BOB.md documentation for workspace",
+            "/permissions": "View current tool permissions",
+            "/enable": "Enable a tool permission",
+            "/disable": "Disable a tool permission",
         }
 
         # Conversation area (includes welcome message, then conversations)
@@ -154,6 +177,35 @@ class CodeAgentTUI:
 
             print(f"Warning: Could not save conversation: {e}", file=sys.stderr)
 
+    async def _on_tool_call(self, tool_calls, tool_results):
+        """Callback when tools are called - display in UI"""
+        if tool_results is None:
+            # Tools are about to be executed
+            for tc in tool_calls:
+                tool_name = tc.function.name
+                # Parse arguments to show them nicely
+                import json
+
+                try:
+                    args = json.loads(tc.function.arguments)
+                    args_str = ", ".join(f"{k}={repr(v)[:50]}" for k, v in args.items())
+                except Exception:
+                    args_str = "..."
+
+                await self.append_output(f"{self.GRAY}  🔧 {tool_name}({args_str})\n")
+        else:
+            # Tools have been executed, show results
+            for result in tool_results:
+                status = "✓" if not result.is_error else "✗"
+                # Truncate long results for display
+                result_preview = result.content[:100].replace("\n", " ")
+                if len(result.content) > 100:
+                    result_preview += "..."
+
+                await self.append_output(
+                    f"{self.GRAY}  {status} {result.tool_name}: {result_preview}{self.RESET}\n\n"
+                )
+
     async def _load_conversation(self, filename: str):
         """Load a conversation and restore it to the current session"""
         try:
@@ -224,6 +276,125 @@ class CodeAgentTUI:
         # Show selector and focus it
         self.showing_selector = True
         self.app.layout.focus(self.conversation_radio_list)
+
+    async def _handle_init_command(self):
+        """Generate BOB.md file with workspace analysis"""
+        await self.append_output(f"{self.GRAY}Generating BOB.md workspace documentation...\n\n")
+
+        init_prompt = """Analyze this workspace and create a BOB.md file with comprehensive documentation:
+
+1. **Project Overview**: Summarize the project's purpose and main functionality
+2. **Directory Structure**: Map out the key directories and their purposes
+3. **Key Files**: Identify important files and explain their roles
+4. **Development Setup**: Document how to set up the development environment
+5. **Common Tasks**: List frequent workflows and commands
+
+Use the read tool to explore the codebase structure and files.
+Use the write tool to create a well-formatted BOB.md file.
+Be thorough but concise - focus on what's most useful for developers."""
+
+        try:
+            # Use non-streaming chat for tool-based commands
+            response = await self.agent.chat(init_prompt)
+            await self.append_output(f"{response}\n{self.RESET}\n")
+        except Exception as e:
+            await self.append_output(f"\n{self.RESET}❌ Error generating BOB.md: {str(e)}\n\n")
+
+    async def _handle_permissions_command(self):
+        """Show current tool permissions"""
+        try:
+            settings = self.workspace_config.load_settings()
+            perms = settings.permissions
+
+            await self.append_output(f"{self.GRAY}Tool Permissions:\n\n")
+            await self.append_output(
+                f"  File Operations:   {'✓ enabled ' if perms.allow_file_operations else '✗ disabled'}\n"
+            )
+            await self.append_output(
+                f"  Shell Commands:    {'✓ enabled ' if perms.allow_shell_commands else '✗ disabled'}\n"
+            )
+            await self.append_output(
+                f"  Network Access:    {'✓ enabled ' if perms.allow_network_access else '✗ disabled'}\n"
+            )
+            await self.append_output(
+                f"\nUse /enable or /disable to modify permissions.{self.RESET}\n\n"
+            )
+        except Exception as e:
+            await self.append_output(
+                f"{self.GRAY}Error loading permissions: {str(e)}{self.RESET}\n\n"
+            )
+
+    async def _handle_enable_permission(self, permission: str):
+        """Enable a specific permission"""
+        # Map user-friendly names to field names
+        permission_map = {
+            "file_operations": "allow_file_operations",
+            "shell_commands": "allow_shell_commands",
+            "network_access": "allow_network_access",
+        }
+
+        if permission not in permission_map:
+            await self.append_output(
+                f"{self.GRAY}✗ Unknown permission: {permission}\n"
+                f"Available permissions: file_operations, shell_commands, network_access{self.RESET}\n\n"
+            )
+            return
+
+        try:
+            settings = self.workspace_config.load_settings()
+            field_name = permission_map[permission]
+
+            # Update the permission
+            setattr(settings.permissions, field_name, True)
+            self.workspace_config.save_settings(settings)
+
+            # Update agent's executor with new permissions
+            if self.agent.tool_executor:
+                self.agent.tool_executor.permissions = settings.permissions
+
+            await self.append_output(
+                f"{self.GRAY}✓ Enabled {permission.replace('_', ' ')}{self.RESET}\n\n"
+            )
+        except Exception as e:
+            await self.append_output(
+                f"{self.GRAY}✗ Error enabling permission: {str(e)}{self.RESET}\n\n"
+            )
+
+    async def _handle_disable_permission(self, permission: str):
+        """Disable a specific permission"""
+        # Map user-friendly names to field names
+        permission_map = {
+            "file_operations": "allow_file_operations",
+            "shell_commands": "allow_shell_commands",
+            "network_access": "allow_network_access",
+        }
+
+        if permission not in permission_map:
+            await self.append_output(
+                f"{self.GRAY}✗ Unknown permission: {permission}\n"
+                f"Available permissions: file_operations, shell_commands, network_access{self.RESET}\n\n"
+            )
+            return
+
+        try:
+            settings = self.workspace_config.load_settings()
+            field_name = permission_map[permission]
+
+            # Update the permission
+            setattr(settings.permissions, field_name, False)
+            self.workspace_config.save_settings(settings)
+
+            # Update agent's executor with new permissions
+            if self.agent.tool_executor:
+                self.agent.tool_executor.permissions = settings.permissions
+
+            await self.append_output(
+                f"{self.GRAY}✓ Disabled {permission.replace('_', ' ')}{self.RESET}\n\n"
+            )
+        except Exception as e:
+            await self.append_output(
+                f"{self.GRAY}✗ Error disabling permission: {str(e)}{self.RESET}\n\n"
+            )
 
     def _welcome_message(self) -> str:
         """Generate welcome screen with ASCII art logo and ANSI colors."""
@@ -400,30 +571,42 @@ class CodeAgentTUI:
             return
 
         # Show user's message
-        await self.append_output(f"  > {user_text}\n\n  ")
+        await self.append_output(f"  > {user_text}\n\n")
 
-        # Stream agent response with gray color
-        self.is_streaming = True
-        await self.append_output(self.GRAY)  # Start gray color for Bob's response
+        # Use non-streaming chat when tools are available
+        if self.agent.tool_registry:
+            # Show working indicator
+            await self.append_output(f"{self.GRAY}  ⚡ Bob is working...\n\n")
 
-        try:
-            async for chunk in self.agent.stream_chat(user_text):
-                for char in chunk.content:
-                    await self.append_output(char)
-                    # Variable delay for natural typing feel
-                    if char in [".", "!", "?"]:
-                        await asyncio.sleep(0.03)
-                    elif char in [",", ";", ":"]:
-                        await asyncio.sleep(0.02)
-                    elif char == "\n":
-                        await asyncio.sleep(0.01)
-                    else:
-                        await asyncio.sleep(0.003)
-        except Exception as e:
-            await self.append_output(f"{self.RESET}\n\n❌ Error: {str(e)}\n")
+            try:
+                response = await self.agent.chat(user_text)
+                # Clear working indicator and show response
+                await self.append_output(f"{self.GRAY}{response}{self.RESET}\n\n")
+            except Exception as e:
+                await self.append_output(f"{self.RESET}\n\n❌ Error: {str(e)}\n\n")
+        else:
+            # Stream agent response with gray color (no tools available)
+            self.is_streaming = True
+            await self.append_output(f"  {self.GRAY}")
 
-        await self.append_output(f"{self.RESET}\n\n")
-        self.is_streaming = False
+            try:
+                async for chunk in self.agent.stream_chat(user_text):
+                    for char in chunk.content:
+                        await self.append_output(char)
+                        # Variable delay for natural typing feel
+                        if char in [".", "!", "?"]:
+                            await asyncio.sleep(0.03)
+                        elif char in [",", ";", ":"]:
+                            await asyncio.sleep(0.02)
+                        elif char == "\n":
+                            await asyncio.sleep(0.01)
+                        else:
+                            await asyncio.sleep(0.003)
+            except Exception as e:
+                await self.append_output(f"{self.RESET}\n\n❌ Error: {str(e)}\n\n")
+
+            await self.append_output(f"{self.RESET}\n\n")
+            self.is_streaming = False
 
         # Update token count (approximate)
         self.token_count = len(self.agent.conversation_history) * 100  # rough estimate
@@ -471,11 +654,25 @@ class CodeAgentTUI:
                     # Update workspace settings
                     self.workspace_config.update_model(new_model)
 
-                    # Recreate provider and agent
+                    # Recreate provider and agent (preserve tools and permissions)
                     provider = AzureOpenAIProvider(model=new_model)
                     old_history = self.agent.conversation_history
+
+                    # Load permissions for agent
+                    try:
+                        settings = self.workspace_config.load_settings()
+                        permissions = settings.permissions
+                    except (FileNotFoundError, ValueError):
+                        from src.workspace.config import ToolPermissions
+
+                        permissions = ToolPermissions()
+
                     self.agent = CodeAgent(
-                        provider, on_conversation_update=self._on_conversation_update
+                        provider,
+                        on_conversation_update=self._on_conversation_update,
+                        tool_registry=self.tool_registry,
+                        tool_permissions=permissions,
+                        on_tool_call=self._on_tool_call,
                     )
                     self.agent.conversation_history = old_history
 
@@ -516,6 +713,32 @@ class CodeAgentTUI:
                     await self.append_output(f"    {marker}{model.value}\n")
 
             await self.append_output(f"\nUse /model <model_value> to switch{self.RESET}\n\n")
+
+        elif cmd == "/init":
+            await self._handle_init_command()
+
+        elif cmd == "/permissions":
+            await self._handle_permissions_command()
+
+        elif cmd.startswith("/enable"):
+            parts = command.split(maxsplit=1)
+            if len(parts) == 1:
+                await self.append_output(
+                    f"{self.GRAY}Usage: /enable <permission>\n"
+                    f"Available permissions: file_operations, shell_commands, network_access{self.RESET}\n\n"
+                )
+            else:
+                await self._handle_enable_permission(parts[1].strip())
+
+        elif cmd.startswith("/disable"):
+            parts = command.split(maxsplit=1)
+            if len(parts) == 1:
+                await self.append_output(
+                    f"{self.GRAY}Usage: /disable <permission>\n"
+                    f"Available permissions: file_operations, shell_commands, network_access{self.RESET}\n\n"
+                )
+            else:
+                await self._handle_disable_permission(parts[1].strip())
 
         else:
             await self.append_output(f"{self.GRAY}Unknown command: {command}\n")
