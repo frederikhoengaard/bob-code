@@ -1,3 +1,10 @@
+██████╗  ██████╗ ██████╗
+██╔══██╗██╔═══██╗██╔══██╗
+██████╔╝██║   ██║██████╔╝
+██╔══██╗██║   ██║██╔══██╗
+██████╔╝╚██████╔╝██████╔╝
+╚═════╝  ╚═════╝ ╚═════╝
+
 # Bob Code
 
 **Bob** is a Terminal User Interface (TUI) AI coding assistant that brings the power of multiple LLM providers directly into your terminal. With agentic tool-calling capabilities, Bob can read, write, and execute commands in your workspace autonomously.
@@ -71,25 +78,25 @@ make clean       # Remove .venv and requirements.lock
 Bob is built with a modular architecture separating concerns across several key components:
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        TUI Layer                            │
-│                  (CodeAgentTUI)                             │
-│  - Input handling  - Display  - Commands  - Streaming      │
-└────────────────────┬────────────────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────────────────┐
-│                     Agent Layer                             │
-│                    (CodeAgent)                              │
-│  - Conversation state  - Agentic loop  - Tool coordination │
-└─────┬──────────────────────────────┬─────────────────────┬──┘
-      │                              │                     │
-┌─────▼──────────┐        ┌──────────▼─────────┐    ┌─────▼──────┐
-│   Providers    │        │    Tool System     │    │ Workspace  │
-│  - OpenAI      │        │  - Registry        │    │  - Config  │
-│  - Azure       │        │  - Executor        │    │  - Persist │
-│  - Anthropic   │        │  - Permissions     │    │  - Settings│
-│  - DeepSeek    │        │  - Read/Write/Bash │    │            │
-└────────────────┘        └────────────────────┘    └────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                         TUI Layer                            │
+│                      (CodeAgentTUI)                          │
+│   - Input handling  - Display  - Commands  - Streaming       │
+└────────────────────┬─────────────────────────────────────────┘
+                              │
+┌─────────────────────────────▼────────────────────────────────┐
+│                        Agent Layer                           │
+│                        (CodeAgent)                           │
+│  - Conversation state  - Agentic loop  - Tool coordination   │
+└─────┬───────────────────────────┬────────────────────┬───────┘
+      │                           │                    │
+┌─────▼──────────┐     ┌──────────▼─────────┐    ┌─────▼───────┐
+│ Providers      │     │ Tool System        │    │ Workspace   │
+│  - OpenAI      │     │  - Registry        │    │  - Config   │
+│  - Azure       │     │  - Executor        │    │  - Persist  │
+│  - Anthropic   │     │  - Permissions     │    │  - Settings │
+│  - DeepSeek    │     │  - Read/Write/Bash │    │             │
+└────────────────┘     └────────────────────┘    └─────────────┘
 ```
 
 ### Core Components
