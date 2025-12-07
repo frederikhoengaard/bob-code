@@ -32,7 +32,7 @@ class GitignoreFilter:
         try:
             import pathspec
 
-            with open(gitignore_path, "r") as f:
+            with open(gitignore_path) as f:
                 patterns = f.read().splitlines()
 
             # Create PathSpec from gitignore patterns

@@ -69,13 +69,27 @@ class CodeAgentTUI:
         self.current_conversation_file = self.persistence.start_new_conversation(str(model))
 
         # Initialize tool registry
-        from src.tools.implementations import BashTool, ReadTool, WriteTool
+        from src.tools.implementations import BashTool, ReadTool, TaskTool, WriteTool
         from src.tools.registry import ToolRegistry
 
         self.tool_registry = ToolRegistry()
         self.tool_registry.register(ReadTool())
         self.tool_registry.register(WriteTool())
         self.tool_registry.register(BashTool())
+
+        # Provider factory for subagents
+        def provider_factory(model_override=None):
+            model_to_use = LLM(model_override) if model_override else model
+            return AzureOpenAIProvider(model=model_to_use)
+
+        # Register TaskTool
+        self.tool_registry.register(
+            TaskTool(
+                provider_factory=provider_factory,
+                is_subagent=False,
+                on_subagent_event=self._on_subagent_event,
+            )
+        )
 
         # Create agent with tools and save callback
         self.agent = CodeAgent(
@@ -178,6 +192,9 @@ class CodeAgentTUI:
         self.base_output_length = 0
         self.tool_call_output = ""
 
+        # Subagent state tracking
+        self.subagent_stack = []  # Stack of active subagents
+
     def _initialize_workspace_if_needed(self):
         """Initialize workspace if .bob/ doesn't exist"""
         try:
@@ -241,6 +258,80 @@ class CodeAgentTUI:
 
         # Update the display with current state
         self._update_working_display()
+
+    async def _on_subagent_event(self, event_type: str, *args):
+        """Callback for subagent lifecycle events"""
+        if not self.is_working:
+            return
+
+        if event_type == "start":
+            subagent_type, task_prompt = args
+            self.subagent_stack.append(subagent_type)
+
+            # Show subagent start
+            preview = task_prompt[:80].replace("\n", " ")
+            if len(task_prompt) > 80:
+                preview += "..."
+
+            self.tool_call_output += (
+                f"{self.GRAY}  ⚡ Spawning {subagent_type} subagent: {preview}\n"
+            )
+            self._update_working_display()
+
+        elif event_type == "tool_call":
+            # Subagent tool call - args are (tool_calls, tool_results)
+            tool_calls, tool_results = args
+            indent = "    "  # Extra indent for subagent tools
+
+            if tool_results is None:
+                # Tools about to execute
+                for tc in tool_calls:
+                    tool_name = tc.function.name
+                    import json
+
+                    try:
+                        args_dict = json.loads(tc.function.arguments)
+                        args_str = ", ".join(f"{k}={repr(v)[:40]}" for k, v in args_dict.items())
+                    except Exception:
+                        args_str = "..."
+
+                    self.tool_call_output += f"{self.GRAY}{indent}🔧 {tool_name}({args_str})\n"
+            else:
+                # Tools executed
+                for result in tool_results:
+                    status = "✓" if not result.is_error else "✗"
+                    result_preview = result.content[:80].replace("\n", " ")
+                    if len(result.content) > 80:
+                        result_preview += "..."
+
+                    self.tool_call_output += f"{self.GRAY}{indent}{status} {result.tool_name}: {result_preview}{self.RESET}\n"
+
+            self._update_working_display()
+
+        elif event_type == "complete":
+            subagent_type, result = args
+            if self.subagent_stack and self.subagent_stack[-1] == subagent_type:
+                self.subagent_stack.pop()
+
+            # Show completion
+            result_preview = result[:100].replace("\n", " ")
+            if len(result) > 100:
+                result_preview += "..."
+
+            self.tool_call_output += (
+                f"{self.GRAY}  ✓ {subagent_type} subagent complete: {result_preview}\n\n"
+            )
+            self._update_working_display()
+
+        elif event_type == "error":
+            subagent_type, error_msg = args
+            if self.subagent_stack and self.subagent_stack[-1] == subagent_type:
+                self.subagent_stack.pop()
+
+            self.tool_call_output += (
+                f"{self.GRAY}  ✗ {subagent_type} subagent error: {error_msg}\n\n"
+            )
+            self._update_working_display()
 
     def _update_working_display(self):
         """Update the output area with working indicator and tool output"""
