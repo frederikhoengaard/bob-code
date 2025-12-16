@@ -7,6 +7,19 @@ from src.utils.gitignore import GitignoreFilter
 class ReadTool(BaseTool):
     """Tool for reading file contents"""
 
+    def __init__(self):
+        """Initialize ReadTool with file tracking"""
+        self._read_files = set()
+
+    def has_read_file(self, file_path: str) -> bool:
+        """Check if a file has been read"""
+        # Normalize path for comparison
+        try:
+            resolved = Path(file_path).resolve()
+            return str(resolved) in self._read_files
+        except Exception:
+            return False
+
     @property
     def name(self) -> str:
         return "read"
@@ -64,6 +77,9 @@ class ReadTool(BaseTool):
                 return f"Error: Cannot read '{file_path}' - file is excluded by .gitignore"
 
             content = resolved_path.read_text()
+
+            # Track that this file was read
+            self._read_files.add(str(resolved_path))
 
             # Add file info for context
             line_count = len(content.splitlines())

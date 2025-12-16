@@ -1,4 +1,4 @@
-from typing import Callable
+from collections.abc import Callable
 
 from src.prompts import SYSTEM_PROMPT_BASIC
 from src.providers import LLMProvider

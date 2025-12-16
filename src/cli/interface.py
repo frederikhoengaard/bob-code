@@ -69,13 +69,17 @@ class CodeAgentTUI:
         self.current_conversation_file = self.persistence.start_new_conversation(str(model))
 
         # Initialize tool registry
-        from src.tools.implementations import BashTool, ReadTool, TaskTool, WriteTool
+        from src.tools.implementations import BashTool, EditTool, ReadTool, TaskTool, WriteTool
         from src.tools.registry import ToolRegistry
 
         self.tool_registry = ToolRegistry()
-        self.tool_registry.register(ReadTool())
+
+        # Create ReadTool first so EditTool can reference it
+        read_tool = ReadTool()
+        self.tool_registry.register(read_tool)
         self.tool_registry.register(WriteTool())
         self.tool_registry.register(BashTool())
+        self.tool_registry.register(EditTool(read_tool=read_tool))
 
         # Provider factory for subagents
         def provider_factory(model_override=None):

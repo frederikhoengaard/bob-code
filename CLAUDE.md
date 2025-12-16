@@ -87,6 +87,7 @@ Permission-based tool execution:
 **Built-in Tools:**
 - `ReadTool` - Read file contents (respects .gitignore via pathspec)
 - `WriteTool` - Create/overwrite files
+- `EditTool` - Perform exact string replacements in files (requires reading first)
 - `BashTool` - Execute shell commands with timeout (default 30s)
 - `TaskTool` - Spawn specialized subagents (explore/plan)
 
@@ -100,7 +101,7 @@ The `task` tool spawns specialized agents with focused capabilities:
 - Use for: finding files, understanding code structure, searching patterns
 
 **Plan agent** (full access, thorough):
-- Tools: read, write, bash
+- Tools: read, write, edit, bash
 - Max iterations: 15
 - System prompt: SYSTEM_PROMPT_PLAN
 - Use for: designing implementations, creating detailed plans, analyzing architecture
@@ -215,6 +216,14 @@ agent = CodeAgent(
 
 ## Important Implementation Details
 
+### EditTool and ReadTool Integration
+The EditTool requires that files be read before editing:
+- ReadTool tracks files that have been read in `_read_files` set
+- EditTool receives a reference to ReadTool and calls `read_tool.has_read_file()` before editing
+- This prevents editing files without understanding their current state
+- Path normalization ensures different path representations (relative/absolute) are handled correctly
+- Both tools are instantiated together in src/cli/interface.py:78-82
+
 ### Tool Execution Flow
 1. LLM returns tool_calls in response
 2. ToolExecutor.execute_tool_calls() processes in parallel
@@ -281,6 +290,7 @@ src/
 │   └── implementations/
 │       ├── read.py                  # ReadTool (respects .gitignore)
 │       ├── write.py                 # WriteTool
+│       ├── edit.py                  # EditTool (exact string replacement)
 │       ├── bash.py                  # BashTool
 │       └── task.py                  # TaskTool (subagent spawning)
 ├── workspace/
