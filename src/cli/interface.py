@@ -69,13 +69,37 @@ class CodeAgentTUI:
         self.current_conversation_file = self.persistence.start_new_conversation(str(model))
 
         # Initialize tool registry
-        from src.tools.implementations import BashTool, ReadTool, TaskTool, WriteTool
+        from src.tools.implementations import (
+            AskUserQuestionTool,
+            BashTool,
+            EditTool,
+            EnterPlanModeTool,
+            ExitPlanModeTool,
+            ReadTool,
+            SlashCommandTool,
+            TaskTool,
+            WriteTool,
+        )
         from src.tools.registry import ToolRegistry
 
         self.tool_registry = ToolRegistry()
-        self.tool_registry.register(ReadTool())
+
+        # Create ReadTool first so EditTool can reference it
+        read_tool = ReadTool()
+        self.tool_registry.register(read_tool)
         self.tool_registry.register(WriteTool())
         self.tool_registry.register(BashTool())
+        self.tool_registry.register(EditTool(read_tool=read_tool))
+        self.tool_registry.register(
+            AskUserQuestionTool(on_question_callback=self._on_user_question)
+        )
+        self.tool_registry.register(SlashCommandTool(command_handler=self._on_slash_command))
+        self.tool_registry.register(
+            EnterPlanModeTool(on_enter_plan_mode_callback=self._on_enter_plan_mode)
+        )
+        self.tool_registry.register(
+            ExitPlanModeTool(on_exit_plan_mode_callback=self._on_exit_plan_mode)
+        )
 
         # Provider factory for subagents
         def provider_factory(model_override=None):
@@ -114,6 +138,7 @@ class CodeAgentTUI:
             "/permissions": "View current tool permissions",
             "/enable": "Enable a tool permission",
             "/disable": "Disable a tool permission",
+            "/test-question": "Test the ask_user_question tool",
         }
 
         # Conversation area (includes welcome message, then conversations)
@@ -194,6 +219,14 @@ class CodeAgentTUI:
 
         # Subagent state tracking
         self.subagent_stack = []  # Stack of active subagents
+
+        # Question answering state
+        self.pending_question_answer = None
+        self.pending_question_event = None
+        self.pending_question_options = None
+
+        # Plan mode state
+        self.is_in_plan_mode = False
 
     def _initialize_workspace_if_needed(self):
         """Initialize workspace if .bob/ doesn't exist"""
@@ -332,6 +365,217 @@ class CodeAgentTUI:
                 f"{self.GRAY}  ✗ {subagent_type} subagent error: {error_msg}\n\n"
             )
             self._update_working_display()
+
+    async def _on_user_question(self, questions):
+        """
+        Callback for AskUserQuestionTool - display questions and get user input.
+
+        Args:
+            questions: List of Question objects
+
+        Returns:
+            Dict mapping question_i to answer string
+        """
+
+        # Pause the working indicator
+        was_working = self.is_working
+        if was_working:
+            self.is_working = False
+
+        # Display questions in conversation area
+        question_text = f"\n{self.GRAY}{'='*60}\n"
+        question_text += "❓ Bob has questions for you:\n"
+        question_text += f"{'='*60}{self.RESET}\n\n"
+
+        answers = {}
+
+        for i, q in enumerate(questions):
+            # Display question
+            question_text += f"{self.GRAY}[{q.header}]{self.RESET}\n"
+            question_text += f"{q.question}\n\n"
+
+            # Display options
+            for j, opt in enumerate(q.options, 1):
+                question_text += f"  {j}. {opt['label']}\n"
+                question_text += f"     {self.GRAY}{opt['description']}{self.RESET}\n\n"
+
+            if q.multi_select:
+                question_text += f"{self.GRAY}(Select one or more, comma-separated, or type custom answer){self.RESET}\n"
+            else:
+                question_text += f"{self.GRAY}(Select number or type custom answer){self.RESET}\n"
+
+            question_text += f"\n{q.header} ► "
+
+            # Show the question
+            await self.append_output(question_text)
+
+            # Wait for user input (this is a simplified approach)
+            # In a real implementation, you'd want to create an interactive prompt
+            # For now, we'll use a simple text input approach
+            user_answer = await self._get_user_answer_for_question(q, i)
+            answers[f"question_{i}"] = user_answer
+
+            # Show the answer
+            await self.append_output(f"{user_answer}\n\n")
+
+            # Reset for next question
+            question_text = ""
+
+        await self.append_output(f"{self.GRAY}{'='*60}{self.RESET}\n\n")
+
+        # Resume working indicator
+        if was_working:
+            self.is_working = True
+
+        return answers
+
+    async def _get_user_answer_for_question(self, question, question_index):
+        """
+        Get user's answer for a single question.
+
+        This is a simplified implementation that creates an asyncio Event
+        to wait for the user to type and submit their answer.
+
+        Args:
+            question: Question object
+            question_index: Index of the question
+
+        Returns:
+            User's answer as a string
+        """
+        # Create an event to signal when answer is received
+        self.pending_question_answer = None
+        self.pending_question_event = asyncio.Event()
+        self.pending_question_options = question.options
+
+        # Wait for user to submit answer
+        await self.pending_question_event.wait()
+
+        # Get and clear the answer
+        answer = self.pending_question_answer
+        self.pending_question_answer = None
+        self.pending_question_event = None
+        self.pending_question_options = None
+
+        # Parse answer (convert numbers to labels if needed)
+        if answer and answer.isdigit():
+            option_num = int(answer)
+            if 1 <= option_num <= len(question.options):
+                answer = question.options[option_num - 1]["label"]
+
+        return answer or "No answer provided"
+
+    async def _on_slash_command(self, command: str) -> str:
+        """
+        Callback for SlashCommandTool - execute a slash command programmatically.
+
+        Args:
+            command: The slash command to execute (e.g., "/help", "/model gpt-4")
+
+        Returns:
+            Result of the command execution as a string
+        """
+        # Use handle_command which already implements all slash command logic
+        # Capture the output by temporarily storing it
+
+        # Save current conversation state
+        old_conversation = self.conversation_buffer.text
+
+        # Execute the command (which will append to conversation buffer)
+        await self.handle_command(command)
+
+        # Get the new content (everything after the old conversation)
+        new_conversation = self.conversation_buffer.text
+
+        # Extract just the command output
+        if new_conversation.startswith(old_conversation):
+            result = new_conversation[len(old_conversation) :]
+        else:
+            result = new_conversation
+
+        return result.strip() or "Command executed"
+
+    async def _on_enter_plan_mode(self) -> bool:
+        """
+        Callback for EnterPlanModeTool - request user approval for plan mode.
+
+        Returns:
+            True if user approves, False otherwise
+        """
+        # Pause the working indicator
+        was_working = self.is_working
+        if was_working:
+            self.is_working = False
+
+        # Display plan mode request
+        message = f"\n{self.GRAY}{'='*60}\n"
+        message += "📋 Bob wants to enter Plan Mode\n"
+        message += f"{'='*60}{self.RESET}\n\n"
+        message += (
+            f"{self.GRAY}Plan mode allows thorough exploration and design before implementation.\n"
+        )
+        message += "In plan mode, Bob will:\n"
+        message += "  1. Explore the codebase thoroughly\n"
+        message += "  2. Understand existing patterns\n"
+        message += "  3. Design an implementation approach\n"
+        message += "  4. Present a plan for your approval\n\n"
+        message += "Do you want to enter plan mode? (yes/no)\n"
+        message += f"Plan Mode ► {self.RESET}"
+
+        await self.append_output(message)
+
+        # Wait for user input
+        self.pending_question_answer = None
+        self.pending_question_event = asyncio.Event()
+
+        await self.pending_question_event.wait()
+
+        # Get and parse the answer
+        answer = self.pending_question_answer
+        self.pending_question_answer = None
+        self.pending_question_event = None
+
+        # Parse answer
+        approved = answer and answer.lower() in ["yes", "y", "1", "true"]
+
+        # Update state
+        if approved:
+            self.is_in_plan_mode = True
+            await self.append_output(
+                f"\n{self.GRAY}✓ Plan mode activated{self.RESET}\n{self.GRAY}{'='*60}{self.RESET}\n\n"
+            )
+        else:
+            await self.append_output(
+                f"\n{self.GRAY}✗ Plan mode declined{self.RESET}\n{self.GRAY}{'='*60}{self.RESET}\n\n"
+            )
+
+        # Resume working indicator
+        if was_working:
+            self.is_working = True
+
+        return approved
+
+    async def _on_exit_plan_mode(self) -> str:
+        """
+        Callback for ExitPlanModeTool - exit plan mode and transition to implementation.
+
+        Returns:
+            Status message
+        """
+        if not self.is_in_plan_mode:
+            return "Warning: Not currently in plan mode"
+
+        self.is_in_plan_mode = False
+
+        message = (
+            f"\n{self.GRAY}{'='*60}\n"
+            "Plan mode exited. Transitioning to implementation.\n"
+            f"{'='*60}{self.RESET}\n"
+        )
+
+        await self.append_output(message)
+
+        return "Plan mode exited successfully. Ready to implement."
 
     def _update_working_display(self):
         """Update the output area with working indicator and tool output"""
@@ -742,6 +986,12 @@ Be thorough but concise - focus on what's most useful for developers."""
 
         # Clear input field immediately
         self.input_area.text = ""
+
+        # Check if we're waiting for an answer to a question
+        if self.pending_question_event:
+            self.pending_question_answer = user_text
+            self.pending_question_event.set()
+            return
 
         # Handle special commands
         if user_text.startswith("/"):

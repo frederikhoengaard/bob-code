@@ -30,7 +30,7 @@ class SubagentFactory:
         # Lazy import to avoid circular dependency
         from src.tools.implementations import BashTool, ReadTool
 
-        # Read-only tools
+        # Read-only tools (no EditTool - explore is read-only)
         tool_registry = ToolRegistry()
         tool_registry.register(ReadTool())
         tool_registry.register(BashTool(timeout=10))  # Shorter timeout
@@ -58,13 +58,23 @@ class SubagentFactory:
         """Create Plan agent: architecture and implementation planning"""
 
         # Lazy import to avoid circular dependency
-        from src.tools.implementations import BashTool, ReadTool, WriteTool
+        from src.tools.implementations import (
+            BashTool,
+            EditTool,
+            ReadTool,
+            WriteTool,
+        )
 
         # Full tool access
         tool_registry = ToolRegistry()
-        tool_registry.register(ReadTool())
+        read_tool = ReadTool()
+        tool_registry.register(read_tool)
         tool_registry.register(WriteTool())
         tool_registry.register(BashTool())
+        tool_registry.register(EditTool(read_tool=read_tool))
+
+        # Note: AskUserQuestionTool requires a callback which subagents don't have access to
+        # So we don't register it for subagents to avoid confusion
 
         # Full permissions (but NO Task tool - no recursion)
         permissions = ToolPermissions(
