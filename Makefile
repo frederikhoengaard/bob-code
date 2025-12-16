@@ -23,6 +23,9 @@ lock:
 run:
 	$(PYTHON) -m src.main
 
+bob:
+	$(PYTHON) -m src.main
+
 # Clean virtual environment and lockfile
 clean:
 	rm -rf $(VENV_DIR) requirements.lock
