@@ -1,3 +1,5 @@
+from typing import Callable
+
 from src.prompts import SYSTEM_PROMPT_BASIC
 from src.providers import LLMProvider
 from src.providers.models import Message
@@ -10,10 +12,10 @@ class CodeAgent:
         self,
         provider: LLMProvider,
         system_prompt: str | None = None,
-        on_conversation_update: callable | None = None,
+        on_conversation_update: Callable | None = None,
         tool_registry=None,
         tool_permissions=None,
-        on_tool_call: callable | None = None,
+        on_tool_call: Callable | None = None,
         is_subagent: bool = False,
     ):
         self.provider = provider
