@@ -90,6 +90,10 @@ Permission-based tool execution:
 - `EditTool` - Perform exact string replacements in files (requires reading first)
 - `BashTool` - Execute shell commands with timeout (default 30s)
 - `TaskTool` - Spawn specialized subagents (explore/plan)
+- `AskUserQuestionTool` - Ask users questions during execution (1-4 questions with 2-4 options each)
+- `SlashCommandTool` - Execute slash commands programmatically (e.g., /help, /model, /permissions)
+- `EnterPlanModeTool` - Enter planning mode for complex tasks (requires user approval)
+- `ExitPlanModeTool` - Exit planning mode and transition to implementation
 
 #### 4. Subagent System (src/agent/subagent.py)
 The `task` tool spawns specialized agents with focused capabilities:
@@ -222,7 +226,43 @@ The EditTool requires that files be read before editing:
 - EditTool receives a reference to ReadTool and calls `read_tool.has_read_file()` before editing
 - This prevents editing files without understanding their current state
 - Path normalization ensures different path representations (relative/absolute) are handled correctly
-- Both tools are instantiated together in src/cli/interface.py:78-82
+- Both tools are instantiated together in src/cli/interface.py:85-89
+
+### AskUserQuestionTool Integration
+The AskUserQuestionTool provides interactive questioning during agent execution:
+- Receives `on_question_callback` pointing to TUI's `_on_user_question()` method
+- When executed, displays questions in the conversation area and pauses agent execution
+- Uses asyncio.Event to synchronize: tool waits for user input, `process_input()` detects pending question and sets event
+- Supports 1-4 questions with 2-4 options each, users can select by number or provide custom text
+- Automatically pauses/resumes working indicator during question flow
+- NOT available to subagents (requires TUI callback which subagents don't have)
+- System prompt encourages proactive use when requests are ambiguous
+- See TESTING_ASK_TOOL.md for detailed testing scenarios
+
+### SlashCommandTool Integration
+The SlashCommandTool allows the agent to execute slash commands programmatically:
+- Receives `command_handler` callback pointing to TUI's `_on_slash_command()` method
+- Callback uses existing `handle_command()` logic and captures output by comparing conversation buffer before/after
+- Can execute any registered slash command (e.g., /help, /model, /permissions, /enable, /disable)
+- Useful for the agent to check current state or modify settings when needed
+- Always available to main agent (no special permissions required)
+- NOT available to subagents (requires TUI callback)
+
+### Plan Mode Integration
+Plan mode allows the agent to thoroughly explore and plan before implementation:
+- **EnterPlanModeTool** requests user approval via `_on_enter_plan_mode()` callback
+- User sees a prompt explaining plan mode and can approve/decline (yes/no)
+- State tracked in `is_in_plan_mode` boolean flag
+- When approved, agent enters planning phase with full tool access for exploration
+- **ExitPlanModeTool** transitions out of plan mode via `_on_exit_plan_mode()` callback
+  - ONLY for implementation tasks (writing code), NOT research tasks (understanding codebase)
+  - Agent should present plan in conversation before calling this tool
+  - Should use ask_user_question to clarify ambiguities before exiting
+  - Examples: "implement feature X" (use tool) vs "understand component Y" (don't use - just research)
+- Both tools use the same `pending_question_event` mechanism as AskUserQuestionTool
+- Intended for complex tasks: multiple approaches, architectural decisions, large changes, unclear requirements
+- NOT for simple tasks, small bugs, or obvious implementations
+- NOT available to subagents (requires TUI callback)
 
 ### Tool Execution Flow
 1. LLM returns tool_calls in response
@@ -292,7 +332,11 @@ src/
 │       ├── write.py                 # WriteTool
 │       ├── edit.py                  # EditTool (exact string replacement)
 │       ├── bash.py                  # BashTool
-│       └── task.py                  # TaskTool (subagent spawning)
+│       ├── task.py                  # TaskTool (subagent spawning)
+│       ├── ask.py                   # AskUserQuestionTool (interactive questions)
+│       ├── slash_command.py         # SlashCommandTool (programmatic slash commands)
+│       ├── plan_mode.py             # EnterPlanModeTool (enter planning mode)
+│       └── exit_plan_mode.py        # ExitPlanModeTool (exit planning mode)
 ├── workspace/
 │   ├── config.py                    # WorkspaceConfig, ToolPermissions
 │   └── persistence.py               # ConversationPersistence
